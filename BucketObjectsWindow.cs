@@ -282,7 +282,7 @@ namespace S3BucketSync
                                 {
                                     await _s3.CopyObjectAsync(request, cancel);
                                 }
-                                string operation = String.Format("{0}.{1} {2} ({3:F0}MB:{4})", batch.BatchId, objectNumber, (targetObject == null) ? "copied" : "updated", sourceObject.Size / 1000000.0, 1.0 * sourceObject.Size / timer.ElapsedMilliseconds, key);
+                                string operation = String.Format("{0}.{1} {2} ({3:F0}MB:{4})", batch.BatchId, objectNumber, (targetObject == null) ? "copied" : "updated", sourceObject.Size / 1000000.0, key);
                                 if (targetObject != null) operation += " " + sourceObject.ETag + " vs " + targetObject.ETag;
                                 Program.LogVerbose(operation);
                             }
