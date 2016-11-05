@@ -370,12 +370,19 @@ Logging and Saved State:
                                                 if (_Abort != 0) return;
                                             }
                                         }
+                                        DateTime modificationCutoffTime = DateTime.UtcNow.AddMinutes(-15);
                                         using (TrackOperation("PROCESS: Checking batch " + batch.BatchId + retryString))
                                         {
                                             List<S3Object> objects = batch.Response.S3Objects;
                                             int count = objects.Count;
                                             for (int n = 0; n < count; ++n)
                                             {
+                                                // has this object been created or modified in the past 15 minutes? skip this one, as AWS may be in the process of replicating it
+                                                if (objects[n].LastModified > modificationCutoffTime)
+                                                {
+                                                    Interlocked.Increment(ref _ObjectsProcessedThisRun);
+                                                    continue;
+                                                }
                                                 string unprefixedKey = objects[n].Key.Substring(sourcePrefix.Length);
                                                 Task copyOperation = _TargetBucketObjectsWindow.UpdateObjectIfNeeded(batch, n, unprefixedKey);
                                                 // if there was async processing necessary, add it to the list of tasks
