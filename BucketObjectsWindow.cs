@@ -28,6 +28,7 @@ namespace S3BucketSync
         private readonly IAmazonS3 _s3;
         private readonly string _bucket;
         private readonly string _prefix;
+        private readonly S3Grant _grant;
         /// <summary>
         /// A monitor to serialize removing batches from the queue.
         /// </summary>
@@ -55,7 +56,7 @@ namespace S3BucketSync
         /// <param name="regionBucketAndPrefix">The region, bucket, and prefix, in the following form: [region:]bucket/prefix.</param>
         /// <param name="batchIdCounter">The <see cref="BatchIdCounter"/> for this window.</param>
         /// <param name="unprefixedStartAtKey">The key to start at or <b>null</b> to start at the beginning.</param>
-        public BucketObjectsWindow(string regionBucketAndPrefix, BatchIdCounter batchIdCounter, string unprefixedStartAtKey = null)
+        public BucketObjectsWindow(string regionBucketAndPrefix, BatchIdCounter batchIdCounter, string unprefixedStartAtKey = null, S3Grant grant = null)
         {
             _batchIdCounter = batchIdCounter;
             Tuple<string, string, string> parsedRegionBucketAndPrefix = ParseRegionBucketAndPrefix(regionBucketAndPrefix);
@@ -63,6 +64,7 @@ namespace S3BucketSync
             _s3 = new AmazonS3Client(region);
             _bucket = parsedRegionBucketAndPrefix.Item2;
             _prefix = parsedRegionBucketAndPrefix.Item3;
+            _grant = grant;
             _queue = new ConcurrentQueue<Batch>();
             if (!string.IsNullOrEmpty(unprefixedStartAtKey))
             {
@@ -278,6 +280,10 @@ namespace S3BucketSync
                                 request.SourceKey = sourceObject.Key;
                                 request.DestinationBucket = _bucket;
                                 request.DestinationKey = _prefix + key;
+                                if (_grant != null)
+                                {
+                                    request.Grants.Add(_grant);
+                                }
                                 Program.State.AddChargeForCopies(1);
                                 using (Program.TrackOperation("COPY: " + batch.BatchId + "." + objectNumber + ": " + key + " (" + sourceObject.Size / 1000000 + "MB)"))
                                 {

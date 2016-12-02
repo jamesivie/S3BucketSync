@@ -1,4 +1,5 @@
-﻿using Amazon.S3.Model;
+﻿using Amazon.S3;
+using Amazon.S3.Model;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -34,6 +35,7 @@ namespace S3BucketSync
         static private string _LogFilePath;
         static private string _ErrorFilePath;
         static private bool _Verbose;
+        static private S3Grant _Grant;
         static private int _SourceObjectsReadThisRun;    // interlocked
         static private int _TargetObjectsReadThisRun;    // interlocked
         static private int _ObjectsProcessedThisRun;    // interlocked
@@ -58,7 +60,7 @@ namespace S3BucketSync
                 {
                     Console.WriteLine(@"
 S3BucketSync Usage:
-    S3BucketSync <source_region>:<source_bucket>[source_prefix] <target_region>:<target_bucket>[target_prefix] [common_prefix] [-b] [-v]
+    S3BucketSync <source_region>:<source_bucket>[source_prefix] <target_region>:<target_bucket>[target_prefix] [common_prefix] [-b] [-v] [-g<account_email>]
 
 Purpose:
     Copies or updates objects from the source bucket to the destination bucket if the object doesn't exist in the destination bucket or the Etag of the corresponding object does not match
@@ -67,6 +69,7 @@ Options:
     common_prefix is an optional prefix string that is appended to both the source_prefix and target_prefix just to save typing the same prefixes for two different buckets
     -b means restart at the beginning, ignore any saved state
     -v means output extra messages to see more details of what's going on
+    -g grants the account represented by the email full rights
 
 Examples:
     S3BucketUsage us-east-1:main us-west-2:backup /files
@@ -76,6 +79,8 @@ Examples:
         synchronizes objects with keys starting with '/files' from the main bucket in the us-east-1 region to the backup bucket in the us-west-2 region, prepending '/subpath' to the keys as it goes
     S3BucketUsage us-east-1:main us-west-2:backup -b
         synchronizes all objects from the main bucket in the us-east-1 region to the backup bucket in the us-west-2 region, ignoring any saved state from previous runs
+    S3BucketUsage us-east-1:main us-west-2:main -g it@agilix.com
+        Give the account represented by the email it@agilix.com full access to the copied objects.
 
 Interaction:
     ESC: exit (state is saved at the last fully-completed bucket, so you can restart near where you left off)
@@ -102,6 +107,10 @@ Logging and Saved State:
                         if (argument.ToLowerInvariant().StartsWith("-v"))
                         {
                             _Verbose = true;
+                        }
+                        if (argument.ToLowerInvariant().StartsWith("-g"))
+                        {
+                            _Grant = CreateS3Grant(argument.Substring(2));
                         }
                     }
                     else if (string.IsNullOrEmpty(sourceRegionBucketAndPrefix)) sourceRegionBucketAndPrefix = argument;
@@ -138,12 +147,12 @@ Logging and Saved State:
                     if (_State == null)
                     {
                         // use a default state
-                        _State = new State(sourceRegionBucketAndPrefix, targetRegionBucketAndPrefix);
+                        _State = new State(sourceRegionBucketAndPrefix, targetRegionBucketAndPrefix, (_Grant == null ? "none" : _Grant.Grantee.EmailAddress));
                     }
                     // initialize the source bucket objects window
                     _SourceBucketObjectsWindow = new BucketObjectsWindow(sourceRegionBucketAndPrefix, _State.SourceBatchId, _State.LastKeyOfLastBatchCompleted);
                     // initialize the target bucket objects window
-                    _TargetBucketObjectsWindow = new BucketObjectsWindow(targetRegionBucketAndPrefix, new BatchIdCounter(), _State.LastKeyOfLastBatchCompleted);
+                    _TargetBucketObjectsWindow = new BucketObjectsWindow(targetRegionBucketAndPrefix, new BatchIdCounter(), _State.LastKeyOfLastBatchCompleted, _Grant);
                     // fire up a thread to dump the status every few seconds
                     Thread statusDumper = new Thread(new ThreadStart(StatusDumper));
                     statusDumper.Name = "StatusDumper";
@@ -218,7 +227,17 @@ Logging and Saved State:
                 Console.WriteLine("Fatal Error: " + ex.ToString());
             }
         }
-
+        /// <summary>
+        /// Creates an S3 Grant for the given account email address.
+        /// </summary>
+        private static S3Grant CreateS3Grant(string accountEmailAddress)
+        {
+            return new S3Grant
+            {
+                Grantee = new S3Grantee { EmailAddress = accountEmailAddress },
+                Permission = S3Permission.FULL_CONTROL
+            };
+        }
         /// <summary>
         /// A static function that loops expanding the target window as needed.
         /// </summary>
