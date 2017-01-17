@@ -35,6 +35,7 @@ namespace S3BucketSync
         static private string _LogFilePath;
         static private string _ErrorFilePath;
         static private bool _Verbose;
+        static private bool _GrantTargetOwnerFullControl;
         static private S3Grant _Grant;
         static private int _SourceObjectsReadThisRun;    // interlocked
         static private int _TargetObjectsReadThisRun;    // interlocked
@@ -70,6 +71,7 @@ Options:
     -b means restart at the beginning, ignore any saved state
     -v means output extra messages to see more details of what's going on
     -g grants the account represented by the email full rights
+    -ofc grants the target account owner full control of their copy
 
 Examples:
     S3BucketSync us-east-1:main us-west-2:backup /files
@@ -112,6 +114,10 @@ Logging and Saved State:
                         {
                             _Grant = CreateS3Grant(argument.Substring(2));
                         }
+                        if (argument.ToLowerInvariant().StartsWith("-ofc"))
+                        {
+                            _GrantTargetOwnerFullControl = true;
+                        }
                     }
                     else if (string.IsNullOrEmpty(sourceRegionBucketAndPrefix)) sourceRegionBucketAndPrefix = argument;
                     else if (string.IsNullOrEmpty(targetRegionBucketAndPrefix)) targetRegionBucketAndPrefix = argument;
@@ -147,12 +153,12 @@ Logging and Saved State:
                     if (_State == null)
                     {
                         // use a default state
-                        _State = new State(sourceRegionBucketAndPrefix, targetRegionBucketAndPrefix, (_Grant == null ? "none" : _Grant.Grantee.EmailAddress));
+                        _State = new State(sourceRegionBucketAndPrefix, targetRegionBucketAndPrefix, (_Grant == null ? "none" : _Grant.Grantee.EmailAddress), _GrantTargetOwnerFullControl);
                     }
                     // initialize the source bucket objects window
                     _SourceBucketObjectsWindow = new BucketObjectsWindow(sourceRegionBucketAndPrefix, _State.SourceBatchId, _State.LastKeyOfLastBatchCompleted);
                     // initialize the target bucket objects window
-                    _TargetBucketObjectsWindow = new BucketObjectsWindow(targetRegionBucketAndPrefix, new BatchIdCounter(), _State.LastKeyOfLastBatchCompleted, _Grant);
+                    _TargetBucketObjectsWindow = new BucketObjectsWindow(targetRegionBucketAndPrefix, new BatchIdCounter(), _State.LastKeyOfLastBatchCompleted, _Grant, _GrantTargetOwnerFullControl);
                     // fire up a thread to dump the status every few seconds
                     Thread statusDumper = new Thread(new ThreadStart(StatusDumper));
                     statusDumper.Name = "StatusDumper";

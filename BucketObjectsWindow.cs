@@ -29,6 +29,7 @@ namespace S3BucketSync
         private readonly string _bucket;
         private readonly string _prefix;
         private readonly S3Grant _grant;
+        private readonly bool _grantTargetOwnerFullControl;
         /// <summary>
         /// A monitor to serialize removing batches from the queue.
         /// </summary>
@@ -56,7 +57,9 @@ namespace S3BucketSync
         /// <param name="regionBucketAndPrefix">The region, bucket, and prefix, in the following form: [region:]bucket/prefix.</param>
         /// <param name="batchIdCounter">The <see cref="BatchIdCounter"/> for this window.</param>
         /// <param name="unprefixedStartAtKey">The key to start at or <b>null</b> to start at the beginning.</param>
-        public BucketObjectsWindow(string regionBucketAndPrefix, BatchIdCounter batchIdCounter, string unprefixedStartAtKey = null, S3Grant grant = null)
+        /// <param name="grantTargetOwnerFullControl">An <see cref="S3Grant"/> indicating an account to grant full access to.</param>
+        /// <param name="grant">Whether or not to grant the target bucket's owner full control over the copies.</param>
+        public BucketObjectsWindow(string regionBucketAndPrefix, BatchIdCounter batchIdCounter, string unprefixedStartAtKey = null, S3Grant grant = null, bool grantTargetOwnerFullControl = false)
         {
             _batchIdCounter = batchIdCounter;
             Tuple<string, string, string> parsedRegionBucketAndPrefix = ParseRegionBucketAndPrefix(regionBucketAndPrefix);
@@ -65,6 +68,7 @@ namespace S3BucketSync
             _bucket = parsedRegionBucketAndPrefix.Item2;
             _prefix = parsedRegionBucketAndPrefix.Item3;
             _grant = grant;
+            _grantTargetOwnerFullControl = grantTargetOwnerFullControl;
             _queue = new ConcurrentQueue<Batch>();
             if (!string.IsNullOrEmpty(unprefixedStartAtKey))
             {
@@ -280,6 +284,10 @@ namespace S3BucketSync
                                 request.SourceKey = sourceObject.Key;
                                 request.DestinationBucket = _bucket;
                                 request.DestinationKey = _prefix + key;
+                                if (_grantTargetOwnerFullControl)
+                                {
+                                    request.CannedACL = S3CannedACL.BucketOwnerFullControl;
+                                }
                                 if (_grant != null)
                                 {
                                     request.Grants.Add(_grant);
