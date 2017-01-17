@@ -72,14 +72,14 @@ Options:
     -g grants the account represented by the email full rights
 
 Examples:
-    S3BucketUsage us-east-1:main us-west-2:backup /files
-    S3BucketUsage us-east-1:main/files us-west-2:backup/files
+    S3BucketSync us-east-1:main us-west-2:backup /files
+    S3BucketSync us-east-1:main/files us-west-2:backup/files
         synchronizes objects with keys starting with '/files' from the main bucket in the us-east-1 region to the backup bucket in the us-west-2 region
-    S3BucketUsage us-east-1:main us-west-2:backup/subpath /files
+    S3BucketSync us-east-1:main us-west-2:backup/subpath /files
         synchronizes objects with keys starting with '/files' from the main bucket in the us-east-1 region to the backup bucket in the us-west-2 region, prepending '/subpath' to the keys as it goes
-    S3BucketUsage us-east-1:main us-west-2:backup -b
+    S3BucketSync us-east-1:main us-west-2:backup -b
         synchronizes all objects from the main bucket in the us-east-1 region to the backup bucket in the us-west-2 region, ignoring any saved state from previous runs
-    S3BucketUsage us-east-1:main us-west-2:main -g it@agilix.com
+    S3BucketSync us-east-1:main us-west-2:main -g it@agilix.com
         Give the account represented by the email it@agilix.com full access to the copied objects.
 
 Interaction:
