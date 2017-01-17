@@ -61,9 +61,9 @@ namespace S3BucketSync
         /// </summary>
         /// <param name="sourceRegionBucketAndPrefix">The source region, bucket, and prefix.</param>
         /// <param name="targetRegionBucketAndPrefix">The target region, bucket, and prefix.</param>
-        /// <param name="grant">The email address of an account to grant access to.</param>
         /// <param name="grantTargetOwnerFullControl">Whether or not to grant the target bucket's owner full control over the copies.</param>
-        public State(string sourceRegionBucketAndPrefix, string targetRegionBucketAndPrefix, string grant, bool grantTargetOwnerFullControl)
+        /// <param name="grant">The email address of an account to grant access to.</param>
+        public State(string sourceRegionBucketAndPrefix, string targetRegionBucketAndPrefix, bool grantTargetOwnerFullControl, string grant)
         {
             _sourceRegionBucketAndPrefix = sourceRegionBucketAndPrefix;
             _targetRegionBucketAndPrefix = targetRegionBucketAndPrefix;

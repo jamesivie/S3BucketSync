@@ -59,7 +59,7 @@ namespace S3BucketSync
         /// <param name="unprefixedStartAtKey">The key to start at or <b>null</b> to start at the beginning.</param>
         /// <param name="grantTargetOwnerFullControl">An <see cref="S3Grant"/> indicating an account to grant full access to.</param>
         /// <param name="grant">Whether or not to grant the target bucket's owner full control over the copies.</param>
-        public BucketObjectsWindow(string regionBucketAndPrefix, BatchIdCounter batchIdCounter, string unprefixedStartAtKey = null, S3Grant grant = null, bool grantTargetOwnerFullControl = false)
+        public BucketObjectsWindow(string regionBucketAndPrefix, BatchIdCounter batchIdCounter, string unprefixedStartAtKey = null, bool grantTargetOwnerFullControl = false, S3Grant grant = null)
         {
             _batchIdCounter = batchIdCounter;
             Tuple<string, string, string> parsedRegionBucketAndPrefix = ParseRegionBucketAndPrefix(regionBucketAndPrefix);

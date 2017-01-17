@@ -61,7 +61,7 @@ namespace S3BucketSync
                 {
                     Console.WriteLine(@"
 S3BucketSync Usage:
-    S3BucketSync <source_region>:<source_bucket>[source_prefix] <target_region>:<target_bucket>[target_prefix] [common_prefix] [-b] [-v] [-g<account_email>]
+    S3BucketSync <source_region>:<source_bucket>[source_prefix] <target_region>:<target_bucket>[target_prefix] [common_prefix] [-b] [-v] [-ofc] [-g<account_email>]
 
 Purpose:
     Copies or updates objects from the source bucket to the destination bucket if the object doesn't exist in the destination bucket or the Etag of the corresponding object does not match
@@ -106,17 +106,17 @@ Logging and Saved State:
                         {
                             reset = true;
                         }
-                        if (argument.ToLowerInvariant().StartsWith("-v"))
+                        else if (argument.ToLowerInvariant().StartsWith("-v"))
                         {
                             _Verbose = true;
                         }
-                        if (argument.ToLowerInvariant().StartsWith("-g"))
-                        {
-                            _Grant = CreateS3Grant(argument.Substring(2));
-                        }
-                        if (argument.ToLowerInvariant().StartsWith("-ofc"))
+                        else if (argument.ToLowerInvariant().StartsWith("-ofc"))
                         {
                             _GrantTargetOwnerFullControl = true;
+                        }
+                        else if (argument.ToLowerInvariant().StartsWith("-g"))
+                        {
+                            _Grant = CreateS3Grant(argument.Substring(2));
                         }
                     }
                     else if (string.IsNullOrEmpty(sourceRegionBucketAndPrefix)) sourceRegionBucketAndPrefix = argument;
@@ -153,12 +153,12 @@ Logging and Saved State:
                     if (_State == null)
                     {
                         // use a default state
-                        _State = new State(sourceRegionBucketAndPrefix, targetRegionBucketAndPrefix, (_Grant == null ? "none" : _Grant.Grantee.EmailAddress), _GrantTargetOwnerFullControl);
+                        _State = new State(sourceRegionBucketAndPrefix, targetRegionBucketAndPrefix, _GrantTargetOwnerFullControl, (_Grant == null ? "none" : _Grant.Grantee.EmailAddress));
                     }
                     // initialize the source bucket objects window
-                    _SourceBucketObjectsWindow = new BucketObjectsWindow(sourceRegionBucketAndPrefix, _State.SourceBatchId, _State.LastKeyOfLastBatchCompleted);
+                    _SourceBucketObjectsWindow = new BucketObjectsWindow(sourceRegionBucketAndPrefix, _State.SourceBatchId, _State.LastKeyOfLastBatchCompleted, _GrantTargetOwnerFullControl);
                     // initialize the target bucket objects window
-                    _TargetBucketObjectsWindow = new BucketObjectsWindow(targetRegionBucketAndPrefix, new BatchIdCounter(), _State.LastKeyOfLastBatchCompleted, _Grant, _GrantTargetOwnerFullControl);
+                    _TargetBucketObjectsWindow = new BucketObjectsWindow(targetRegionBucketAndPrefix, new BatchIdCounter(), _State.LastKeyOfLastBatchCompleted, _GrantTargetOwnerFullControl, _Grant);
                     // fire up a thread to dump the status every few seconds
                     Thread statusDumper = new Thread(new ThreadStart(StatusDumper));
                     statusDumper.Name = "StatusDumper";
