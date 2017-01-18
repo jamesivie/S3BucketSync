@@ -1,4 +1,5 @@
-﻿using Amazon.S3.Model;
+﻿using Amazon.S3;
+using Amazon.S3.Model;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -29,7 +30,7 @@ namespace S3BucketSync
         private readonly string _sourceRegionBucketAndPrefix;
         private readonly string _targetRegionBucketAndPrefix;
         private readonly string _grant;
-        private readonly bool _grantTargetOwnerFullControl;
+        private readonly S3CannedACL _grantCannedAcl;
         private readonly DateTime _startDate;
         // everything after this is interlocked
         private long _unrecordedTimeStartTicks;
@@ -61,14 +62,14 @@ namespace S3BucketSync
         /// </summary>
         /// <param name="sourceRegionBucketAndPrefix">The source region, bucket, and prefix.</param>
         /// <param name="targetRegionBucketAndPrefix">The target region, bucket, and prefix.</param>
-        /// <param name="grantTargetOwnerFullControl">Whether or not to grant the target bucket's owner full control over the copies.</param>
-        /// <param name="grant">The email address of an account to grant access to.</param>
-        public State(string sourceRegionBucketAndPrefix, string targetRegionBucketAndPrefix, bool grantTargetOwnerFullControl, string grant)
+        /// <param name="cannedAcl">A <see cref="S3CannedACL"/> to use to assign rights to the target file.</param>
+        /// <param name="grant">A <see cref="S3Grant"/> indicating rights being granted to the target file.</param>
+        public State(string sourceRegionBucketAndPrefix, string targetRegionBucketAndPrefix, S3CannedACL cannedAcl, S3Grant grant)
         {
             _sourceRegionBucketAndPrefix = sourceRegionBucketAndPrefix;
             _targetRegionBucketAndPrefix = targetRegionBucketAndPrefix;
-            _grant = grant;
-            _grantTargetOwnerFullControl = grantTargetOwnerFullControl;
+            _grant = (grant == null ? "none" : grant.Grantee.EmailAddress);
+            _grantCannedAcl = cannedAcl;
             _startDate = DateTime.UtcNow;
             _unrecordedTimeStartTicks = _startDate.Ticks;
             _ticksUsed = 0;
@@ -121,7 +122,7 @@ namespace S3BucketSync
             str.AppendFormat("Latest Copied Object Date: {0}{1}", new DateTime(_latestCopiedDate), Environment.NewLine);
             str.AppendFormat("Latest Updated Object Date: {0}{1}", new DateTime(_latestUpdatedDate), Environment.NewLine);
             str.AppendFormat("Grant: {0}{1}", _grant ?? "None", Environment.NewLine);
-            str.AppendFormat("OFC: {0}{1}", _grantTargetOwnerFullControl.ToString(), Environment.NewLine);
+            str.AppendFormat("GrantACL: {0}{1}", _grantCannedAcl.Value, Environment.NewLine);
             str.AppendLine();
             return str.ToString();
         }

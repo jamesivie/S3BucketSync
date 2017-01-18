@@ -35,7 +35,7 @@ namespace S3BucketSync
         static private string _LogFilePath;
         static private string _ErrorFilePath;
         static private bool _Verbose;
-        static private bool _GrantTargetOwnerFullControl;
+        static private S3CannedACL _GrantCannedAcl;
         static private S3Grant _Grant;
         static private int _SourceObjectsReadThisRun;    // interlocked
         static private int _TargetObjectsReadThisRun;    // interlocked
@@ -61,7 +61,7 @@ namespace S3BucketSync
                 {
                     Console.WriteLine(@"
 S3BucketSync Usage:
-    S3BucketSync <source_region>:<source_bucket>[source_prefix] <target_region>:<target_bucket>[target_prefix] [common_prefix] [-b] [-v] [-ofc] [-g<account_email>]
+    S3BucketSync <source_region>:<source_bucket>[source_prefix] <target_region>:<target_bucket>[target_prefix] [common_prefix] [-b] [-v] [-ofc] [-g <account_email>] [-g <canned_acl_name>]
 
 Purpose:
     Copies or updates objects from the source bucket to the destination bucket if the object doesn't exist in the destination bucket or the Etag of the corresponding object does not match
@@ -71,7 +71,6 @@ Options:
     -b means restart at the beginning, ignore any saved state
     -v means output extra messages to see more details of what's going on
     -g grants the account represented by the email full rights
-    -ofc grants the target account owner full control of their copy
 
 Examples:
     S3BucketSync us-east-1:main us-west-2:backup /files
@@ -83,6 +82,8 @@ Examples:
         synchronizes all objects from the main bucket in the us-east-1 region to the backup bucket in the us-west-2 region, ignoring any saved state from previous runs
     S3BucketSync us-east-1:main us-west-2:main -g it@agilix.com
         Give the account represented by the email it@agilix.com full access to the copied objects.
+    S3BucketSync us-east-1:main us-west-2:main -g bucket-owner-full-control
+        Give the target account full access to the copied objects.
 
 Interaction:
     ESC: exit (state is saved at the last fully-completed bucket, so you can restart near where you left off)
@@ -98,8 +99,9 @@ Logging and Saved State:
                     return;
                 }
                 // process args
-                foreach (string argument in args)
+                for (int narg = 0; narg < args.Length; ++narg)
                 {
+                    string argument = args[narg];
                     if (argument.StartsWith("-"))
                     {
                         if (argument.ToLowerInvariant().StartsWith("-b"))
@@ -110,13 +112,21 @@ Logging and Saved State:
                         {
                             _Verbose = true;
                         }
-                        else if (argument.ToLowerInvariant().StartsWith("-ofc"))
-                        {
-                            _GrantTargetOwnerFullControl = true;
-                        }
                         else if (argument.ToLowerInvariant().StartsWith("-g"))
                         {
-                            _Grant = CreateS3Grant(argument.Substring(2));
+                            if (narg + 1 >= args.Length) throw new ArgumentException("-g must be followed by the email address of the account to grant rights to or the name of a canned ACL!");
+                            string arg = args[narg + 1];
+                            S3CannedACL cannedAcl = CreateS3CannedACL(arg);
+                            // A supported canned ACL?
+                            if (cannedAcl == null)
+                            {
+                                _GrantCannedAcl = cannedAcl;
+                            }
+                            else
+                            {
+                                _Grant = CreateS3Grant(arg);
+                            }
+                            ++narg;
                         }
                     }
                     else if (string.IsNullOrEmpty(sourceRegionBucketAndPrefix)) sourceRegionBucketAndPrefix = argument;
@@ -153,12 +163,12 @@ Logging and Saved State:
                     if (_State == null)
                     {
                         // use a default state
-                        _State = new State(sourceRegionBucketAndPrefix, targetRegionBucketAndPrefix, _GrantTargetOwnerFullControl, (_Grant == null ? "none" : _Grant.Grantee.EmailAddress));
+                        _State = new State(sourceRegionBucketAndPrefix, targetRegionBucketAndPrefix, _GrantCannedAcl, _Grant);
                     }
                     // initialize the source bucket objects window
-                    _SourceBucketObjectsWindow = new BucketObjectsWindow(sourceRegionBucketAndPrefix, _State.SourceBatchId, _State.LastKeyOfLastBatchCompleted, _GrantTargetOwnerFullControl);
+                    _SourceBucketObjectsWindow = new BucketObjectsWindow(sourceRegionBucketAndPrefix, _State.SourceBatchId, _State.LastKeyOfLastBatchCompleted, _GrantCannedAcl);
                     // initialize the target bucket objects window
-                    _TargetBucketObjectsWindow = new BucketObjectsWindow(targetRegionBucketAndPrefix, new BatchIdCounter(), _State.LastKeyOfLastBatchCompleted, _GrantTargetOwnerFullControl, _Grant);
+                    _TargetBucketObjectsWindow = new BucketObjectsWindow(targetRegionBucketAndPrefix, new BatchIdCounter(), _State.LastKeyOfLastBatchCompleted, _GrantCannedAcl, _Grant);
                     // fire up a thread to dump the status every few seconds
                     Thread statusDumper = new Thread(new ThreadStart(StatusDumper));
                     statusDumper.Name = "StatusDumper";
@@ -243,6 +253,25 @@ Logging and Saved State:
                 Grantee = new S3Grantee { EmailAddress = accountEmailAddress },
                 Permission = S3Permission.FULL_CONTROL
             };
+        }
+        /// <summary>
+        /// Creates an <see cref="S3CannedACL"/> from the specified canned ACL name.
+        /// </summary>
+        private static S3CannedACL CreateS3CannedACL(string cannedAclName)
+        {
+            switch (cannedAclName.ToLowerInvariant())
+            {
+                case "authenticated-read": return S3CannedACL.AuthenticatedRead;
+                case "aws-exec-read": return S3CannedACL.AWSExecRead;
+                case "bucket-owner-full-control": return S3CannedACL.BucketOwnerFullControl;
+                case "bucket-owner-read": return S3CannedACL.BucketOwnerRead;
+                case "log-delivery-write": return S3CannedACL.LogDeliveryWrite;
+                case "noacl": return S3CannedACL.NoACL;
+                case "private": return S3CannedACL.Private;
+                case "public-read": return S3CannedACL.PublicRead;
+                case "public-read-write": return S3CannedACL.PublicReadWrite;
+                default: return null;
+            }
         }
         /// <summary>
         /// A static function that loops expanding the target window as needed.
