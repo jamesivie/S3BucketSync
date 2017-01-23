@@ -140,86 +140,6 @@ Logging and Saved State:
                     sourceRegionBucketAndPrefix = AddCommonPrefix(sourceRegionBucketAndPrefix, commonPrefix);
                     targetRegionBucketAndPrefix = AddCommonPrefix(targetRegionBucketAndPrefix, commonPrefix);
                 }
-                /*
-                 Start Sync from us-east-2:agilix-virginia to us-west-2:agilix\empty
-                Fatal Error: Amazon.S3.AmazonS3Exception: The bucket you are attempting to access must be addressed using the specified endpoint. Please send all future requests to this endpoint. ---> Amazon.Runtime.Internal.HttpErrorResponseException: Exception of type 'Amazon.Runtime.Internal.HttpErrorResponseException' was thrown.
-                   at Amazon.Runtime.Internal.RedirectHandler.HandleRedirect(IExecutionContext executionContext)
-                   at Amazon.Runtime.Internal.RedirectHandler.InvokeSync(IExecutionContext executionContext)
-                   at Amazon.Runtime.Internal.PipelineHandler.InvokeSync(IExecutionContext executionContext)
-                   at Amazon.Runtime.Internal.Unmarshaller.InvokeSync(IExecutionContext executionContext)
-                   at Amazon.Runtime.Internal.PipelineHandler.InvokeSync(IExecutionContext executionContext)
-                   at Amazon.S3.Internal.AmazonS3ResponseHandler.InvokeSync(IExecutionContext executionContext)
-                   at Amazon.Runtime.Internal.PipelineHandler.InvokeSync(IExecutionContext executionContext)
-                   at Amazon.Runtime.Internal.ErrorHandler.InvokeSync(IExecutionContext executionContext)
-                   --- End of inner exception stack trace ---
-                   at Amazon.Runtime.Internal.HttpErrorResponseExceptionHandler.HandleException(IExecutionContext executionContext, HttpErrorResponseException exception)
-                   at Amazon.Runtime.Internal.ExceptionHandler`1.Handle(IExecutionContext executionContext, Exception exception)
-                   at Amazon.Runtime.Internal.ErrorHandler.ProcessException(IExecutionContext executionContext, Exception exception)
-                   at Amazon.Runtime.Internal.ErrorHandler.InvokeSync(IExecutionContext executionContext)
-                   at Amazon.Runtime.Internal.PipelineHandler.InvokeSync(IExecutionContext executionContext)
-                   at Amazon.Runtime.Internal.CallbackHandler.InvokeSync(IExecutionContext executionContext)
-                   at Amazon.Runtime.Internal.PipelineHandler.InvokeSync(IExecutionContext executionContext)
-                   at Amazon.Runtime.Internal.Signer.InvokeSync(IExecutionContext executionContext)
-                   at Amazon.Runtime.Internal.PipelineHandler.InvokeSync(IExecutionContext executionContext)
-                   at Amazon.Runtime.Internal.CredentialsRetriever.InvokeSync(IExecutionContext executionContext)
-                   at Amazon.Runtime.Internal.PipelineHandler.InvokeSync(IExecutionContext executionContext)
-                   at Amazon.Runtime.Internal.RetryHandler.InvokeSync(IExecutionContext executionContext)
-                   at Amazon.Runtime.Internal.PipelineHandler.InvokeSync(IExecutionContext executionContext)
-                   at Amazon.Runtime.Internal.CallbackHandler.InvokeSync(IExecutionContext executionContext)
-                   at Amazon.Runtime.Internal.PipelineHandler.InvokeSync(IExecutionContext executionContext)
-                   at Amazon.S3.Internal.AmazonS3KmsHandler.InvokeSync(IExecutionContext executionContext)
-                   at Amazon.Runtime.Internal.PipelineHandler.InvokeSync(IExecutionContext executionContext)
-                   at Amazon.Runtime.Internal.EndpointResolver.InvokeSync(IExecutionContext executionContext)
-                   at Amazon.Runtime.Internal.PipelineHandler.InvokeSync(IExecutionContext executionContext)
-                   at Amazon.S3.Internal.AmazonS3PostMarshallHandler.InvokeSync(IExecutionContext executionContext)
-                   at Amazon.Runtime.Internal.PipelineHandler.InvokeSync(IExecutionContext executionContext)
-                   at Amazon.Runtime.Internal.Marshaller.InvokeSync(IExecutionContext executionContext)
-                   at Amazon.Runtime.Internal.PipelineHandler.InvokeSync(IExecutionContext executionContext)
-                   at Amazon.S3.Internal.AmazonS3PreMarshallHandler.InvokeSync(IExecutionContext executionContext)
-                   at Amazon.Runtime.Internal.PipelineHandler.InvokeSync(IExecutionContext executionContext)
-                   at Amazon.Runtime.Internal.CallbackHandler.InvokeSync(IExecutionContext executionContext)
-                   at Amazon.Runtime.Internal.PipelineHandler.InvokeSync(IExecutionContext executionContext)
-                   at Amazon.S3.Internal.AmazonS3ExceptionHandler.InvokeSync(IExecutionContext executionContext)
-                   at Amazon.Runtime.Internal.PipelineHandler.InvokeSync(IExecutionContext executionContext)
-                   at Amazon.Runtime.Internal.ErrorCallbackHandler.InvokeSync(IExecutionContext executionContext)
-                   at Amazon.Runtime.Internal.PipelineHandler.InvokeSync(IExecutionContext executionContext)
-                   at Amazon.Runtime.Internal.MetricsHandler.InvokeSync(IExecutionContext executionContext)
-                   at Amazon.Runtime.Internal.RuntimePipeline.InvokeSync(IExecutionContext executionContext)
-                   at Amazon.Runtime.AmazonServiceClient.Invoke[TRequest,TResponse](TRequest request, IMarshaller`2 marshaller, ResponseUnmarshaller unmarshaller)
-                   at Amazon.S3.AmazonS3Client.ListObjectsV2(ListObjectsV2Request request)
-                   at S3BucketSync.BucketObjectsWindow.GetNextBatch()
-                   at S3BucketSync.BucketObjectsWindow.ReadNextBatch()
-                   at S3BucketSync.Program.Main(String[] args)
-
-                C:\Users\Administrator\Downloads>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-                * 
-                 * */
 
                 string currentDirectory = Environment.CurrentDirectory;
                 _StateFilePath = Path.Combine(currentDirectory, "state." + sourceRegionBucketAndPrefix.Replace(":", "_").Replace("/", "_") + ".bin");
@@ -292,7 +212,9 @@ Logging and Saved State:
                                 }
                                 catch (Amazon.S3.AmazonS3Exception awsException)
                                 {
-                                    throw new ApplicationException("Unable to read object batch from source bucket.  This may happen if rights have not been granted to the current user or role.", awsException);
+                                    if (awsException.ErrorCode == "AccessDenied") throw new ApplicationException("Access Denied attempting to read object batch from source bucket.  This may happen if ListBucket rights have not been granted to the current user or role.", awsException);
+                                    else if (awsException.ErrorCode == "PermanentRedirect") throw new ApplicationException("PermanentRedirect attempting to read object batch from source bucket.  It looks like you may have specified the wrong region for the source bucket.", awsException);
+                                    throw;
                                 }
                                 Interlocked.Add(ref _SourceObjectsReadThisRun, objectsRead);
                             }
@@ -332,9 +254,7 @@ Logging and Saved State:
 #if DEBUG
                 Debugger.Break();
 #endif
-                Program.Error("");
-                Program.Error("Fatal Error: " + ex.ToString());
-                Console.WriteLine("Fatal Error: " + ex.Message.ToString());
+                Program.Exception(ex);
             }
         }
         private static string AddCommonPrefix(string bucketAndPrefix, string cp)
@@ -633,6 +553,22 @@ Logging and Saved State:
             try
             {
                 if (_Log != null) _Log.WriteLine(message);
+            }
+            catch (ObjectDisposedException)
+            {
+                // ignore this exception
+            }
+        }
+        /// <summary>
+        /// Logs an error message to the console and the error file.
+        /// </summary>
+        /// <param name="ex">The <see cref="System.Exception"/> that occurred.</param>
+        public static void Exception(Exception ex)
+        {
+            Console.WriteLine("ERROR: " + ex.Message + " (see error log file for details)");
+            try
+            {
+                if (_Error != null) _Error.WriteLine(ex.ToString());
             }
             catch (ObjectDisposedException)
             {
