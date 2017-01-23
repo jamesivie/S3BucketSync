@@ -391,10 +391,16 @@ Logging and Saved State:
                 }
                 catch (Exception e)
                 {
-                    Program.Exception("Error reading target bucket: ", e);
                     // is this a non-recoverable error?  kill us!
                     AmazonS3Exception awsS3Exception = e as AmazonS3Exception;
-                    if (awsS3Exception.ErrorCode == "AccessDenied") Environment.Exit(-403);
+                    if (awsS3Exception.ErrorCode == "AccessDenied")
+                    {
+                        Program.FatalException("Error reading target bucket: ", e, -403);
+                    }
+                    else
+                    {
+                        Program.Exception("Error reading target bucket: ", e);
+                    }
                 }
             }
         }
@@ -576,6 +582,27 @@ Logging and Saved State:
             {
                 // ignore this exception
             }
+        }
+        /// <summary>
+        /// Logs an error message to the console and the error file.
+        /// </summary>
+        /// <param name="message">A message to include with the exception.</param>
+        /// <param name="ex">The <see cref="System.Exception"/> that occurred.</param>
+        /// <param name="exitCode">The exit code to use when exiting.</param>
+        public static void FatalException(string message, Exception ex, int exitCode)
+        {
+            Console.WriteLine((message ?? "ERROR: ") + ex.Message + " (see error log file for details)");
+            try
+            {
+                if (_Error != null) _Error.WriteLine(ex.ToString());
+            }
+            catch (ObjectDisposedException)
+            {
+                // ignore this exception
+            }
+            if (_Log != null) _Log.Flush();
+            if (_Error != null) _Error.Flush();
+            Environment.Exit(exitCode);
         }
         /// <summary>
         /// Logs an error message to the console and the error file.
