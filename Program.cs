@@ -332,7 +332,9 @@ Logging and Saved State:
 #if DEBUG
                 Debugger.Break();
 #endif
-                Console.WriteLine("Fatal Error: " + ex.ToString());
+                Program.Error("");
+                Program.Error("Fatal Error: " + ex.ToString());
+                Console.WriteLine("Fatal Error: " + ex.Message.ToString());
             }
         }
         private static string AddCommonPrefix(string bucketAndPrefix, string cp)
@@ -586,14 +588,14 @@ Logging and Saved State:
                                         // retry this batch up to 4 times in addition to the initial run before reporting an error
                                         if (retry < 5)
                                         {
-                                            Program.LogVerbose("Batch " + batch.BatchId + " has failed.  Retry #" + (retry + 1).ToString() + " beginning: " + ex.ToString());
+                                            Program.Log("Batch " + batch.BatchId + " has failed.  Retry #" + (retry + 1).ToString() + " beginning: " + ex.ToString());
                                             // clear the task list so we can try again
                                             tasks.Clear();
                                             continue;
                                         }
                                         else
                                         {
-                                            Program.LogVerbose("Batch " + batch.BatchId + " has failed " + retry.ToString() + " times.  The process will need to be rerun after the problem is corrected: " + ex.ToString());
+                                            Program.Log("Batch " + batch.BatchId + " has failed " + retry.ToString() + " times.  The process will need to be rerun after the problem is corrected: " + ex.ToString());
                                             throw;
                                         }
                                     }
