@@ -37,14 +37,21 @@ namespace S3BucketSync
         static private bool _Verbose;
         static private S3CannedACL _GrantCannedAcl;
         static private S3Grant _Grant;
+        static private Exception _AsyncException;
         static private int _SourceObjectsReadThisRun;    // interlocked
         static private int _TargetObjectsReadThisRun;    // interlocked
         static private int _ObjectsProcessedThisRun;    // interlocked
+        static private int _TimeoutSeconds = 60 * 60;   // the default timeout is 60 minutes
+        static private int _RetryCount = 4;
 
         /// <summary>
         /// Gets the <see cref="State"/> object so we can save where we are and what we've accomplished.
         /// </summary>
         static public State State { get { return _State; } }
+        /// <summary>
+        /// Gets the number of seconds to wait before timing out on a request to S3 to copy a file.
+        /// </summary>
+        static public int TimeoutSeconds { get { return _TimeoutSeconds; } }
 
 
         static void Main(string[] args)
@@ -71,6 +78,8 @@ Options:
     -b means restart at the beginning, ignore any saved state
     -v means output extra messages to see more details of what's going on
     -g grants the account represented by the email full rights
+    -t is the copy timeout in seconds (the default is 60 minutes)
+    -r is the batch retry count (the default is 4)
 
 Examples:
     S3BucketSync us-east-1:main us-west-2:backup /files
@@ -126,6 +135,20 @@ Logging and Saved State:
                             {
                                 _Grant = CreateS3Grant(arg);
                             }
+                            ++narg;
+                        }
+                        else if (argument.ToLowerInvariant().StartsWith("-t"))
+                        {
+                            if (narg + 1 >= args.Length) throw new ArgumentException("-t must be followed by the number of seconds to wait for a copy before timing out!");
+                            string arg = args[narg + 1];
+                            if (!Int32.TryParse(arg, out _TimeoutSeconds)) throw new ArgumentException("The timeout seconds must contain only decimal digits!");
+                            ++narg;
+                        }
+                        else if (argument.ToLowerInvariant().StartsWith("-r"))
+                        {
+                            if (narg + 1 >= args.Length) throw new ArgumentException("-r must be followed by the number of times to retry a batch before logging an error!");
+                            string arg = args[narg + 1];
+                            if (!Int32.TryParse(arg, out _RetryCount)) throw new ArgumentException("The retry count must contain only decimal digits!");
                             ++narg;
                         }
                     }
@@ -198,6 +221,7 @@ Logging and Saved State:
                         // loop until we have processed all the objects or a key is pressed
                         while (!_SourceBucketObjectsWindow.LastBatchHasBeenRead)
                         {
+                            if (_AsyncException != null) throw _AsyncException;
                             if (ExitKeyPressed()) return;
                             // loop until we have the desired number of batches in the window or we hit the end
                             while (_SourceBucketObjectsWindow.BatchesQueued < batchesToQueue && !_SourceBucketObjectsWindow.LastBatchHasBeenRead)
@@ -246,6 +270,7 @@ Logging and Saved State:
                         // we're done getting all the objects, but we still need to finish processing them
                         while (!processor.Join(100))
                         {
+                            if (_AsyncException != null) throw _AsyncException;
                             if (ExitKeyPressed())
                             {
                                 // log the end state
@@ -395,7 +420,8 @@ Logging and Saved State:
                     AmazonS3Exception awsS3Exception = e as AmazonS3Exception;
                     if (awsS3Exception.ErrorCode == "AccessDenied")
                     {
-                        Program.FatalException("Error reading target bucket: ", e, -403);
+                        System.Threading.Interlocked.Exchange(ref _AsyncException, awsS3Exception);
+                        // this should trigger a fatal exception on the main thread
                     }
                     else
                     {
@@ -529,8 +555,8 @@ Logging and Saved State:
                                     }
                                     catch (Exception ex)
                                     {
-                                        // retry this batch up to 4 times in addition to the initial run before reporting an error
-                                        if (retry < 5)
+                                        // retry this batch up to the configured number of times in addition to the initial run before reporting an error
+                                        if (retry <= _RetryCount)
                                         {
                                             Program.Log("Batch " + batch.BatchId + " has failed.  Retry #" + (retry + 1).ToString() + " beginning: " + ex.ToString());
                                             // clear the task list so we can try again
@@ -539,7 +565,7 @@ Logging and Saved State:
                                         }
                                         else
                                         {
-                                            Program.Log("Batch " + batch.BatchId + " has failed " + retry.ToString() + " times.  The process will need to be rerun after the problem is corrected: " + ex.ToString());
+                                            Program.Error("Batch " + batch.BatchId + " has failed " + retry.ToString() + " times.  The process will need to be rerun after the problem is corrected: " + ex.ToString());
                                             throw;
                                         }
                                     }
@@ -582,27 +608,6 @@ Logging and Saved State:
             {
                 // ignore this exception
             }
-        }
-        /// <summary>
-        /// Logs an error message to the console and the error file.
-        /// </summary>
-        /// <param name="message">A message to include with the exception.</param>
-        /// <param name="ex">The <see cref="System.Exception"/> that occurred.</param>
-        /// <param name="exitCode">The exit code to use when exiting.</param>
-        public static void FatalException(string message, Exception ex, int exitCode)
-        {
-            Console.WriteLine((message ?? "ERROR: ") + ex.Message + " (see error log file for details)");
-            try
-            {
-                if (_Error != null) _Error.WriteLine(ex.ToString());
-            }
-            catch (ObjectDisposedException)
-            {
-                // ignore this exception
-            }
-            if (_Log != null) _Log.Flush();
-            if (_Error != null) _Error.Flush();
-            Environment.Exit(exitCode);
         }
         /// <summary>
         /// Logs an error message to the console and the error file.
