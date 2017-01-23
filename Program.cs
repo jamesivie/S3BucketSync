@@ -237,6 +237,8 @@ Logging and Saved State:
                         Debugger.Break();
 #endif
                         Program.Exception("Error reading source bucket: ", ex);
+                        _Log.Flush();
+                        _Error.Flush();
                         return;
                     }
                     using (TrackOperation("MAIN: Queueing complete: Waiting for processing"))
@@ -258,6 +260,8 @@ Logging and Saved State:
                     Program.Log("");
                     Program.Log("This run synchronized " + _ObjectsProcessedThisRun + "/" + _SourceObjectsReadThisRun + " objects against " + _TargetObjectsReadThisRun + " objects: ");
                     Program.Log(_State.Report());
+                    _Log.Flush();
+                    _Error.Flush();
                 }
             }
             catch (Exception ex)
