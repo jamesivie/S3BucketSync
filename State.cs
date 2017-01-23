@@ -121,8 +121,8 @@ namespace S3BucketSync
             str.AppendFormat("Latest Object Date: {0}{1}", new DateTime(_latestDate), Environment.NewLine);
             str.AppendFormat("Latest Copied Object Date: {0}{1}", new DateTime(_latestCopiedDate), Environment.NewLine);
             str.AppendFormat("Latest Updated Object Date: {0}{1}", new DateTime(_latestUpdatedDate), Environment.NewLine);
-            str.AppendFormat("Grant: {0}{1}", _grant ?? "None", Environment.NewLine);
-            str.AppendFormat("GrantACL: {0}{1}", _grantCannedAcl.Value, Environment.NewLine);
+            if (_grant != null) str.AppendFormat("Grant: {0}{1}", _grant, Environment.NewLine);
+            if (_grantCannedAcl != null) str.AppendFormat("GrantACL: {0}{1}", _grantCannedAcl.Value, Environment.NewLine);
             str.AppendLine();
             return str.ToString();
         }

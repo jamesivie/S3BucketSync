@@ -136,9 +136,91 @@ Logging and Saved State:
                 // a common prefix (append to source and destination)
                 if (!string.IsNullOrEmpty(commonPrefix))
                 {
-                    sourceRegionBucketAndPrefix += commonPrefix;
-                    targetRegionBucketAndPrefix += commonPrefix;
+                    // add the common prefix to each bucket/prefix, ensuring that there is a slash (/) separator
+                    sourceRegionBucketAndPrefix = AddCommonPrefix(sourceRegionBucketAndPrefix, commonPrefix);
+                    targetRegionBucketAndPrefix = AddCommonPrefix(targetRegionBucketAndPrefix, commonPrefix);
                 }
+                /*
+                 Start Sync from us-east-2:agilix-virginia to us-west-2:agilix\empty
+                Fatal Error: Amazon.S3.AmazonS3Exception: The bucket you are attempting to access must be addressed using the specified endpoint. Please send all future requests to this endpoint. ---> Amazon.Runtime.Internal.HttpErrorResponseException: Exception of type 'Amazon.Runtime.Internal.HttpErrorResponseException' was thrown.
+                   at Amazon.Runtime.Internal.RedirectHandler.HandleRedirect(IExecutionContext executionContext)
+                   at Amazon.Runtime.Internal.RedirectHandler.InvokeSync(IExecutionContext executionContext)
+                   at Amazon.Runtime.Internal.PipelineHandler.InvokeSync(IExecutionContext executionContext)
+                   at Amazon.Runtime.Internal.Unmarshaller.InvokeSync(IExecutionContext executionContext)
+                   at Amazon.Runtime.Internal.PipelineHandler.InvokeSync(IExecutionContext executionContext)
+                   at Amazon.S3.Internal.AmazonS3ResponseHandler.InvokeSync(IExecutionContext executionContext)
+                   at Amazon.Runtime.Internal.PipelineHandler.InvokeSync(IExecutionContext executionContext)
+                   at Amazon.Runtime.Internal.ErrorHandler.InvokeSync(IExecutionContext executionContext)
+                   --- End of inner exception stack trace ---
+                   at Amazon.Runtime.Internal.HttpErrorResponseExceptionHandler.HandleException(IExecutionContext executionContext, HttpErrorResponseException exception)
+                   at Amazon.Runtime.Internal.ExceptionHandler`1.Handle(IExecutionContext executionContext, Exception exception)
+                   at Amazon.Runtime.Internal.ErrorHandler.ProcessException(IExecutionContext executionContext, Exception exception)
+                   at Amazon.Runtime.Internal.ErrorHandler.InvokeSync(IExecutionContext executionContext)
+                   at Amazon.Runtime.Internal.PipelineHandler.InvokeSync(IExecutionContext executionContext)
+                   at Amazon.Runtime.Internal.CallbackHandler.InvokeSync(IExecutionContext executionContext)
+                   at Amazon.Runtime.Internal.PipelineHandler.InvokeSync(IExecutionContext executionContext)
+                   at Amazon.Runtime.Internal.Signer.InvokeSync(IExecutionContext executionContext)
+                   at Amazon.Runtime.Internal.PipelineHandler.InvokeSync(IExecutionContext executionContext)
+                   at Amazon.Runtime.Internal.CredentialsRetriever.InvokeSync(IExecutionContext executionContext)
+                   at Amazon.Runtime.Internal.PipelineHandler.InvokeSync(IExecutionContext executionContext)
+                   at Amazon.Runtime.Internal.RetryHandler.InvokeSync(IExecutionContext executionContext)
+                   at Amazon.Runtime.Internal.PipelineHandler.InvokeSync(IExecutionContext executionContext)
+                   at Amazon.Runtime.Internal.CallbackHandler.InvokeSync(IExecutionContext executionContext)
+                   at Amazon.Runtime.Internal.PipelineHandler.InvokeSync(IExecutionContext executionContext)
+                   at Amazon.S3.Internal.AmazonS3KmsHandler.InvokeSync(IExecutionContext executionContext)
+                   at Amazon.Runtime.Internal.PipelineHandler.InvokeSync(IExecutionContext executionContext)
+                   at Amazon.Runtime.Internal.EndpointResolver.InvokeSync(IExecutionContext executionContext)
+                   at Amazon.Runtime.Internal.PipelineHandler.InvokeSync(IExecutionContext executionContext)
+                   at Amazon.S3.Internal.AmazonS3PostMarshallHandler.InvokeSync(IExecutionContext executionContext)
+                   at Amazon.Runtime.Internal.PipelineHandler.InvokeSync(IExecutionContext executionContext)
+                   at Amazon.Runtime.Internal.Marshaller.InvokeSync(IExecutionContext executionContext)
+                   at Amazon.Runtime.Internal.PipelineHandler.InvokeSync(IExecutionContext executionContext)
+                   at Amazon.S3.Internal.AmazonS3PreMarshallHandler.InvokeSync(IExecutionContext executionContext)
+                   at Amazon.Runtime.Internal.PipelineHandler.InvokeSync(IExecutionContext executionContext)
+                   at Amazon.Runtime.Internal.CallbackHandler.InvokeSync(IExecutionContext executionContext)
+                   at Amazon.Runtime.Internal.PipelineHandler.InvokeSync(IExecutionContext executionContext)
+                   at Amazon.S3.Internal.AmazonS3ExceptionHandler.InvokeSync(IExecutionContext executionContext)
+                   at Amazon.Runtime.Internal.PipelineHandler.InvokeSync(IExecutionContext executionContext)
+                   at Amazon.Runtime.Internal.ErrorCallbackHandler.InvokeSync(IExecutionContext executionContext)
+                   at Amazon.Runtime.Internal.PipelineHandler.InvokeSync(IExecutionContext executionContext)
+                   at Amazon.Runtime.Internal.MetricsHandler.InvokeSync(IExecutionContext executionContext)
+                   at Amazon.Runtime.Internal.RuntimePipeline.InvokeSync(IExecutionContext executionContext)
+                   at Amazon.Runtime.AmazonServiceClient.Invoke[TRequest,TResponse](TRequest request, IMarshaller`2 marshaller, ResponseUnmarshaller unmarshaller)
+                   at Amazon.S3.AmazonS3Client.ListObjectsV2(ListObjectsV2Request request)
+                   at S3BucketSync.BucketObjectsWindow.GetNextBatch()
+                   at S3BucketSync.BucketObjectsWindow.ReadNextBatch()
+                   at S3BucketSync.Program.Main(String[] args)
+
+                C:\Users\Administrator\Downloads>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                * 
+                 * */
+
                 string currentDirectory = Environment.CurrentDirectory;
                 _StateFilePath = Path.Combine(currentDirectory, "state." + sourceRegionBucketAndPrefix.Replace(":", "_").Replace("/", "_") + ".bin");
                 _LogFilePath = Path.Combine(currentDirectory, "log." + sourceRegionBucketAndPrefix.Replace(":", "_").Replace("/", "_") + ".txt");
@@ -203,7 +285,15 @@ Logging and Saved State:
                             _State.RecordQueries(true);
                             using (TrackOperation("MAIN: Reading batch " + (_SourceBucketObjectsWindow.LastQueuedBatchId + 1).ToString()))
                             {
-                                int objectsRead = _SourceBucketObjectsWindow.ReadNextBatch();
+                                int objectsRead;
+                                try
+                                {
+                                    objectsRead = _SourceBucketObjectsWindow.ReadNextBatch();
+                                }
+                                catch (Amazon.S3.AmazonS3Exception awsException)
+                                {
+                                    throw new ApplicationException("Unable to read object batch from source bucket.  This may happen if rights have not been granted to the current user or role.", awsException);
+                                }
                                 Interlocked.Add(ref _SourceObjectsReadThisRun, objectsRead);
                             }
                         }
@@ -239,9 +329,26 @@ Logging and Saved State:
             }
             catch (Exception ex)
             {
+#if DEBUG
                 Debugger.Break();
+#endif
                 Console.WriteLine("Fatal Error: " + ex.ToString());
             }
+        }
+        private static string AddCommonPrefix(string bucketAndPrefix, string cp)
+        {
+            bool trailingSlash = bucketAndPrefix.EndsWith("/");
+            bool leadingSlash = cp.StartsWith("/");
+
+            if (trailingSlash && leadingSlash)
+            {
+                return bucketAndPrefix.TrimEnd('/') + cp;
+            }
+            else if (trailingSlash || leadingSlash)
+            {
+                return bucketAndPrefix + cp;
+            }
+            return bucketAndPrefix + "/" + cp;
         }
         /// <summary>
         /// Creates an S3 Grant for the given account email address.
