@@ -149,48 +149,48 @@ Logging and Saved State:
                 using (_Log = new StreamWriter(_LogFilePath, true, Encoding.UTF8))
                 using (_Error = new StreamWriter(_ErrorFilePath, true, Encoding.UTF8))
                 {
+                    Program.Log(Environment.NewLine + "Start Sync from " + sourceRegionBucketAndPrefix + " to " + targetRegionBucketAndPrefix);
+                    // possible resume?
+                    if (!reset)
+                    {
+                        // read the previous state (if it's a state for the same source and target)
+                        State resumeState = State.Read(_StateFilePath, sourceRegionBucketAndPrefix, targetRegionBucketAndPrefix);
+                        if (resumeState != null)
+                        {
+                            _State = resumeState;
+                            Program.Log("Resuming previous run: " + State.ToString());
+                        }
+                    }
+                    // no state yet?
+                    if (_State == null)
+                    {
+                        // use a default state
+                        _State = new State(sourceRegionBucketAndPrefix, targetRegionBucketAndPrefix, _GrantCannedAcl, _Grant);
+                    }
+                    // initialize the source bucket objects window
+                    _SourceBucketObjectsWindow = new BucketObjectsWindow(sourceRegionBucketAndPrefix, _State.SourceBatchId, _State.LastKeyOfLastBatchCompleted, _GrantCannedAcl);
+                    // initialize the target bucket objects window
+                    _TargetBucketObjectsWindow = new BucketObjectsWindow(targetRegionBucketAndPrefix, new BatchIdCounter(), _State.LastKeyOfLastBatchCompleted, _GrantCannedAcl, _Grant);
+                    // fire up a thread to dump the status every few seconds
+                    Thread statusDumper = new Thread(new ThreadStart(StatusDumper));
+                    statusDumper.Name = "StatusDumper";
+                    statusDumper.Priority = ThreadPriority.AboveNormal;
+                    statusDumper.IsBackground = true;  // if we abort by hitting a key, don't wait for this thread to finish
+                    statusDumper.Start();
+                    // fire up a thread to expand the target window
+                    Thread targetExpander = new Thread(new ThreadStart(TargetWindowRangeSynchronizer));
+                    targetExpander.Name = "TargetExpander";
+                    targetExpander.Priority = ThreadPriority.AboveNormal;
+                    targetExpander.IsBackground = true;  // if we abort by hitting a key, don't wait for this thread to finish
+                    targetExpander.Start();
+                    // fire up a thread to spawn processing tasks
+                    Thread processor = new Thread(new ThreadStart(Processor));
+                    processor.Name = "Processor";
+                    processor.Priority = ThreadPriority.AboveNormal;
+                    processor.IsBackground = true;  // if we abort by hitting a key, don't wait for this thread to finish
+                    processor.Start();
                     try
                     {
-                        Program.Log(Environment.NewLine + "Start Sync from " + sourceRegionBucketAndPrefix + " to " + targetRegionBucketAndPrefix);
-                        // possible resume?
-                        if (!reset)
-                        {
-                            // read the previous state (if it's a state for the same source and target)
-                            State resumeState = State.Read(_StateFilePath, sourceRegionBucketAndPrefix, targetRegionBucketAndPrefix);
-                            if (resumeState != null)
-                            {
-                                _State = resumeState;
-                                Program.Log("Resuming previous run: " + State.ToString());
-                            }
-                        }
-                        // no state yet?
-                        if (_State == null)
-                        {
-                            // use a default state
-                            _State = new State(sourceRegionBucketAndPrefix, targetRegionBucketAndPrefix, _GrantCannedAcl, _Grant);
-                        }
-                        // initialize the source bucket objects window
-                        _SourceBucketObjectsWindow = new BucketObjectsWindow(sourceRegionBucketAndPrefix, _State.SourceBatchId, _State.LastKeyOfLastBatchCompleted, _GrantCannedAcl);
-                        // initialize the target bucket objects window
-                        _TargetBucketObjectsWindow = new BucketObjectsWindow(targetRegionBucketAndPrefix, new BatchIdCounter(), _State.LastKeyOfLastBatchCompleted, _GrantCannedAcl, _Grant);
-                        // fire up a thread to dump the status every few seconds
-                        Thread statusDumper = new Thread(new ThreadStart(StatusDumper));
-                        statusDumper.Name = "StatusDumper";
-                        statusDumper.Priority = ThreadPriority.AboveNormal;
-                        statusDumper.IsBackground = true;  // if we abort by hitting a key, don't wait for this thread to finish
-                        statusDumper.Start();
-                        // fire up a thread to expand the target window
-                        Thread targetExpander = new Thread(new ThreadStart(TargetWindowRangeSynchronizer));
-                        targetExpander.Name = "TargetExpander";
-                        targetExpander.Priority = ThreadPriority.AboveNormal;
-                        targetExpander.IsBackground = true;  // if we abort by hitting a key, don't wait for this thread to finish
-                        targetExpander.Start();
-                        // fire up a thread to spawn processing tasks
-                        Thread processor = new Thread(new ThreadStart(Processor));
-                        processor.Name = "Processor";
-                        processor.Priority = ThreadPriority.AboveNormal;
-                        processor.IsBackground = true;  // if we abort by hitting a key, don't wait for this thread to finish
-                        processor.Start();
                         // bump up our priority (we're the most important because we feed everything else)
                         Thread.CurrentThread.Priority = ThreadPriority.Highest;
                         // keep making requests for more lists of objects until we have 100 buffered (100,000 pending objects)
@@ -230,33 +230,34 @@ Logging and Saved State:
                                 }
                             }
                         }
-                        using (TrackOperation("MAIN: Queueing complete: Waiting for processing"))
-                        {
-                            // we're done getting all the objects, but we still need to finish processing them
-                            while (!processor.Join(100))
-                            {
-                                if (ExitKeyPressed())
-                                {
-                                    // log the end state
-                                    Program.Log(_State.ToString());
-                                    return;
-                                }
-                            }
-                        }
-                        // the source processing is now complete
-                        Interlocked.Exchange(ref _SourceProcessingComplete, 1);
-                        _State.Delete(_StateFilePath);
-                        Program.Log("");
-                        Program.Log("This run synchronized " + _ObjectsProcessedThisRun + "/" + _SourceObjectsReadThisRun + " objects against " + _TargetObjectsReadThisRun + " objects: ");
-                        Program.Log(_State.Report());
                     }
                     catch (Exception ex)
                     {
 #if DEBUG
                         Debugger.Break();
 #endif
-                        Program.Exception(ex);
+                        Program.Exception("Error reading source bucket: ", ex);
+                        return;
                     }
+                    using (TrackOperation("MAIN: Queueing complete: Waiting for processing"))
+                    {
+                        // we're done getting all the objects, but we still need to finish processing them
+                        while (!processor.Join(100))
+                        {
+                            if (ExitKeyPressed())
+                            {
+                                // log the end state
+                                Program.Log(_State.ToString());
+                                return;
+                            }
+                        }
+                    }
+                    // the source processing is now complete
+                    Interlocked.Exchange(ref _SourceProcessingComplete, 1);
+                    _State.Delete(_StateFilePath);
+                    Program.Log("");
+                    Program.Log("This run synchronized " + _ObjectsProcessedThisRun + "/" + _SourceObjectsReadThisRun + " objects against " + _TargetObjectsReadThisRun + " objects: ");
+                    Program.Log(_State.Report());
                 }
             }
             catch (Exception ex)
@@ -264,7 +265,7 @@ Logging and Saved State:
 #if DEBUG
                 Debugger.Break();
 #endif
-                Program.Exception(ex);
+                Program.Exception("FATAL PROGRAM ERROR: ", ex);
             }
         }
         private static string AddCommonPrefix(string bucketAndPrefix, string cp)
@@ -386,7 +387,10 @@ Logging and Saved State:
                 }
                 catch (Exception e)
                 {
-                    Program.Error("Exception synchronizing target window: " + e.ToString());
+                    Program.Exception("Error reading target bucket: ", e);
+                    // is this a non-recoverable error?  kill us!
+                    AmazonS3Exception awsS3Exception = e as AmazonS3Exception;
+                    if (awsS3Exception.ErrorCode == "AccessDenied") Environment.Exit(-403);
                 }
             }
         }
@@ -572,10 +576,11 @@ Logging and Saved State:
         /// <summary>
         /// Logs an error message to the console and the error file.
         /// </summary>
+        /// <param name="message">A message to include with the exception.</param>
         /// <param name="ex">The <see cref="System.Exception"/> that occurred.</param>
-        public static void Exception(Exception ex)
+        public static void Exception(string message, Exception ex)
         {
-            Console.WriteLine("ERROR: " + ex.Message + " (see error log file for details)");
+            Console.WriteLine((message ?? "ERROR: ") + ex.Message + " (see error log file for details)");
             try
             {
                 if (_Error != null) _Error.WriteLine(ex.ToString());
