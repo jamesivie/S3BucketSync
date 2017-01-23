@@ -149,104 +149,114 @@ Logging and Saved State:
                 using (_Log = new StreamWriter(_LogFilePath, true, Encoding.UTF8))
                 using (_Error = new StreamWriter(_ErrorFilePath, true, Encoding.UTF8))
                 {
-                    Program.Log(Environment.NewLine + "Start Sync from " + sourceRegionBucketAndPrefix + " to " + targetRegionBucketAndPrefix);
-                    // possible resume?
-                    if (!reset)
+                    try
                     {
-                        // read the previous state (if it's a state for the same source and target)
-                        State resumeState = State.Read(_StateFilePath, sourceRegionBucketAndPrefix, targetRegionBucketAndPrefix);
-                        if (resumeState != null)
+                        Program.Log(Environment.NewLine + "Start Sync from " + sourceRegionBucketAndPrefix + " to " + targetRegionBucketAndPrefix);
+                        // possible resume?
+                        if (!reset)
                         {
-                            _State = resumeState;
-                            Program.Log("Resuming previous run: " + State.ToString());
+                            // read the previous state (if it's a state for the same source and target)
+                            State resumeState = State.Read(_StateFilePath, sourceRegionBucketAndPrefix, targetRegionBucketAndPrefix);
+                            if (resumeState != null)
+                            {
+                                _State = resumeState;
+                                Program.Log("Resuming previous run: " + State.ToString());
+                            }
                         }
-                    }
-                    // no state yet?
-                    if (_State == null)
-                    {
-                        // use a default state
-                        _State = new State(sourceRegionBucketAndPrefix, targetRegionBucketAndPrefix, _GrantCannedAcl, _Grant);
-                    }
-                    // initialize the source bucket objects window
-                    _SourceBucketObjectsWindow = new BucketObjectsWindow(sourceRegionBucketAndPrefix, _State.SourceBatchId, _State.LastKeyOfLastBatchCompleted, _GrantCannedAcl);
-                    // initialize the target bucket objects window
-                    _TargetBucketObjectsWindow = new BucketObjectsWindow(targetRegionBucketAndPrefix, new BatchIdCounter(), _State.LastKeyOfLastBatchCompleted, _GrantCannedAcl, _Grant);
-                    // fire up a thread to dump the status every few seconds
-                    Thread statusDumper = new Thread(new ThreadStart(StatusDumper));
-                    statusDumper.Name = "StatusDumper";
-                    statusDumper.Priority = ThreadPriority.AboveNormal;
-                    statusDumper.IsBackground = true;  // if we abort by hitting a key, don't wait for this thread to finish
-                    statusDumper.Start();
-                    // fire up a thread to expand the target window
-                    Thread targetExpander = new Thread(new ThreadStart(TargetWindowRangeSynchronizer));
-                    targetExpander.Name = "TargetExpander";
-                    targetExpander.Priority = ThreadPriority.AboveNormal;
-                    targetExpander.IsBackground = true;  // if we abort by hitting a key, don't wait for this thread to finish
-                    targetExpander.Start();
-                    // fire up a thread to spawn processing tasks
-                    Thread processor = new Thread(new ThreadStart(Processor));
-                    processor.Name = "Processor";
-                    processor.Priority = ThreadPriority.AboveNormal;
-                    processor.IsBackground = true;  // if we abort by hitting a key, don't wait for this thread to finish
-                    processor.Start();
-                    // bump up our priority (we're the most important because we feed everything else)
-                    Thread.CurrentThread.Priority = ThreadPriority.Highest;
-                    // keep making requests for more lists of objects until we have 100 buffered (100,000 pending objects)
-                    int batchesToQueue = 100;
-                    // loop until we have processed all the objects or a key is pressed
-                    while (!_SourceBucketObjectsWindow.LastBatchHasBeenRead)
-                    {
-                        if (ExitKeyPressed()) return;
-                        // loop until we have the desired number of batches in the window or we hit the end
-                        while (_SourceBucketObjectsWindow.BatchesQueued < batchesToQueue && !_SourceBucketObjectsWindow.LastBatchHasBeenRead)
+                        // no state yet?
+                        if (_State == null)
+                        {
+                            // use a default state
+                            _State = new State(sourceRegionBucketAndPrefix, targetRegionBucketAndPrefix, _GrantCannedAcl, _Grant);
+                        }
+                        // initialize the source bucket objects window
+                        _SourceBucketObjectsWindow = new BucketObjectsWindow(sourceRegionBucketAndPrefix, _State.SourceBatchId, _State.LastKeyOfLastBatchCompleted, _GrantCannedAcl);
+                        // initialize the target bucket objects window
+                        _TargetBucketObjectsWindow = new BucketObjectsWindow(targetRegionBucketAndPrefix, new BatchIdCounter(), _State.LastKeyOfLastBatchCompleted, _GrantCannedAcl, _Grant);
+                        // fire up a thread to dump the status every few seconds
+                        Thread statusDumper = new Thread(new ThreadStart(StatusDumper));
+                        statusDumper.Name = "StatusDumper";
+                        statusDumper.Priority = ThreadPriority.AboveNormal;
+                        statusDumper.IsBackground = true;  // if we abort by hitting a key, don't wait for this thread to finish
+                        statusDumper.Start();
+                        // fire up a thread to expand the target window
+                        Thread targetExpander = new Thread(new ThreadStart(TargetWindowRangeSynchronizer));
+                        targetExpander.Name = "TargetExpander";
+                        targetExpander.Priority = ThreadPriority.AboveNormal;
+                        targetExpander.IsBackground = true;  // if we abort by hitting a key, don't wait for this thread to finish
+                        targetExpander.Start();
+                        // fire up a thread to spawn processing tasks
+                        Thread processor = new Thread(new ThreadStart(Processor));
+                        processor.Name = "Processor";
+                        processor.Priority = ThreadPriority.AboveNormal;
+                        processor.IsBackground = true;  // if we abort by hitting a key, don't wait for this thread to finish
+                        processor.Start();
+                        // bump up our priority (we're the most important because we feed everything else)
+                        Thread.CurrentThread.Priority = ThreadPriority.Highest;
+                        // keep making requests for more lists of objects until we have 100 buffered (100,000 pending objects)
+                        int batchesToQueue = 100;
+                        // loop until we have processed all the objects or a key is pressed
+                        while (!_SourceBucketObjectsWindow.LastBatchHasBeenRead)
                         {
                             if (ExitKeyPressed()) return;
-                            // read the next batch
-                            _State.RecordQueries(true);
-                            using (TrackOperation("MAIN: Reading batch " + (_SourceBucketObjectsWindow.LastQueuedBatchId + 1).ToString()))
+                            // loop until we have the desired number of batches in the window or we hit the end
+                            while (_SourceBucketObjectsWindow.BatchesQueued < batchesToQueue && !_SourceBucketObjectsWindow.LastBatchHasBeenRead)
                             {
-                                int objectsRead;
-                                try
+                                if (ExitKeyPressed()) return;
+                                // read the next batch
+                                _State.RecordQueries(true);
+                                using (TrackOperation("MAIN: Reading batch " + (_SourceBucketObjectsWindow.LastQueuedBatchId + 1).ToString()))
                                 {
-                                    objectsRead = _SourceBucketObjectsWindow.ReadNextBatch();
+                                    int objectsRead;
+                                    try
+                                    {
+                                        objectsRead = _SourceBucketObjectsWindow.ReadNextBatch();
+                                    }
+                                    catch (Amazon.S3.AmazonS3Exception awsException)
+                                    {
+                                        if (awsException.ErrorCode == "AccessDenied") throw new ApplicationException("Access Denied attempting to read object batch from source bucket.  This may happen if ListBucket rights have not been granted to the current user or role.", awsException);
+                                        else if (awsException.ErrorCode == "PermanentRedirect") throw new ApplicationException("PermanentRedirect attempting to read object batch from source bucket.  It looks like you may have specified the wrong region for the source bucket.", awsException);
+                                        throw;
+                                    }
+                                    Interlocked.Add(ref _SourceObjectsReadThisRun, objectsRead);
                                 }
-                                catch (Amazon.S3.AmazonS3Exception awsException)
+                            }
+                            // too full?
+                            if (_SourceBucketObjectsWindow.BatchesQueued >= batchesToQueue)
+                            {
+                                using (TrackOperation("MAIN: Waiting for processing"))
                                 {
-                                    if (awsException.ErrorCode == "AccessDenied") throw new ApplicationException("Access Denied attempting to read object batch from source bucket.  This may happen if ListBucket rights have not been granted to the current user or role.", awsException);
-                                    else if (awsException.ErrorCode == "PermanentRedirect") throw new ApplicationException("PermanentRedirect attempting to read object batch from source bucket.  It looks like you may have specified the wrong region for the source bucket.", awsException);
-                                    throw;
+                                    Thread.Sleep(100);
                                 }
-                                Interlocked.Add(ref _SourceObjectsReadThisRun, objectsRead);
                             }
                         }
-                        // too full?
-                        if (_SourceBucketObjectsWindow.BatchesQueued >= batchesToQueue)
+                        using (TrackOperation("MAIN: Queueing complete: Waiting for processing"))
                         {
-                            using (TrackOperation("MAIN: Waiting for processing"))
+                            // we're done getting all the objects, but we still need to finish processing them
+                            while (!processor.Join(100))
                             {
-                                Thread.Sleep(100);
+                                if (ExitKeyPressed())
+                                {
+                                    // log the end state
+                                    Program.Log(_State.ToString());
+                                    return;
+                                }
                             }
                         }
+                        // the source processing is now complete
+                        Interlocked.Exchange(ref _SourceProcessingComplete, 1);
+                        _State.Delete(_StateFilePath);
+                        Program.Log("");
+                        Program.Log("This run synchronized " + _ObjectsProcessedThisRun + "/" + _SourceObjectsReadThisRun + " objects against " + _TargetObjectsReadThisRun + " objects: ");
+                        Program.Log(_State.Report());
                     }
-                    using (TrackOperation("MAIN: Queueing complete: Waiting for processing"))
+                    catch (Exception ex)
                     {
-                        // we're done getting all the objects, but we still need to finish processing them
-                        while (!processor.Join(100))
-                        {
-                            if (ExitKeyPressed())
-                            {
-                                // log the end state
-                                Program.Log(_State.ToString());
-                                return;
-                            }
-                        }
+#if DEBUG
+                        Debugger.Break();
+#endif
+                        Program.Exception(ex);
                     }
-                    // the source processing is now complete
-                    Interlocked.Exchange(ref _SourceProcessingComplete, 1);
-                    _State.Delete(_StateFilePath);
-                    Program.Log("");
-                    Program.Log("This run synchronized " + _ObjectsProcessedThisRun + "/" + _SourceObjectsReadThisRun + " objects against " + _TargetObjectsReadThisRun + " objects: ");
-                    Program.Log(_State.Report());
                 }
             }
             catch (Exception ex)
