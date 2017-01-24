@@ -41,7 +41,7 @@ namespace S3BucketSync
         static private int _SourceObjectsReadThisRun;    // interlocked
         static private int _TargetObjectsReadThisRun;    // interlocked
         static private int _ObjectsProcessedThisRun;    // interlocked
-        static private int _TimeoutSeconds = 60 * 60;   // the default timeout is 60 minutes
+        static private int _TimeoutSeconds = 10 * 60;   // the default timeout is 10 minutes
         static private int _RetryCount = 4;
         static private int _BatchesToQueue = 250;
         static private int _ConcurrentCopies = 10000;
@@ -64,6 +64,7 @@ namespace S3BucketSync
                 string sourceRegionBucketAndPrefix = null;
                 string targetRegionBucketAndPrefix = null;
                 string commonPrefix = null;
+                string grantString = null;
                 bool reset = false;
                 // no arguments or not enough arguments?
                 if (args.Length < 2)
@@ -80,7 +81,7 @@ Options:
     -b means restart at the beginning, ignore any saved state
     -v means output extra messages to see more details of what's going on
     -g grants the account represented by the email full rights
-    -t is the copy timeout in seconds (the default is 60 minutes)
+    -t is the copy timeout in seconds (the default is 10 minutes)
     -r is the batch retry count (the default is 4)
     -q is the maximum number of batches to queue (default is 250)
     -c is the maximum number of concurrent copies to allow before preventing new batches (default is 10,000)
@@ -129,16 +130,7 @@ Logging and Saved State:
                         {
                             if (narg + 1 >= args.Length) throw new ArgumentException("-g must be followed by the email address of the account to grant rights to or the name of a canned ACL!");
                             string arg = args[narg + 1];
-                            S3CannedACL cannedAcl = CreateS3CannedACL(arg);
-                            // A supported canned ACL?
-                            if (cannedAcl != null)
-                            {
-                                _GrantCannedAcl = cannedAcl;
-                            }
-                            else
-                            {
-                                _Grant = CreateS3Grant(arg);
-                            }
+                            grantString = arg;
                             ++narg;
                         }
                         else if (argument.ToLowerInvariant().StartsWith("-t"))
@@ -190,8 +182,6 @@ Logging and Saved State:
                 using (_Log = new StreamWriter(_LogFilePath, true, Encoding.UTF8))
                 using (_Error = new StreamWriter(_ErrorFilePath, true, Encoding.UTF8))
                 {
-                    string grantString = (_Grant != null) ? (" with grant to " + _Grant.Grantee.EmailAddress) : ((_GrantCannedAcl != null) ? (" with canned ACL " + _GrantCannedAcl.Value) : string.Empty);
-                    Program.Log(Environment.NewLine + "Start Sync from " + sourceRegionBucketAndPrefix + " to " + targetRegionBucketAndPrefix + grantString);
                     // possible resume?
                     if (!reset)
                     {
@@ -207,8 +197,20 @@ Logging and Saved State:
                     if (_State == null)
                     {
                         // use a default state
-                        _State = new State(sourceRegionBucketAndPrefix, targetRegionBucketAndPrefix, _GrantCannedAcl, _Grant);
+                        _State = new State(sourceRegionBucketAndPrefix, targetRegionBucketAndPrefix, grantString);
                     }
+                    S3CannedACL cannedAcl = CreateS3CannedACL(_State.GrantString);
+                    // A supported canned ACL?
+                    if (cannedAcl != null)
+                    {
+                        _GrantCannedAcl = cannedAcl;
+                    }
+                    else
+                    {
+                        _Grant = CreateS3Grant(grantString);
+                    }
+                    string grantDisplayString = (_Grant != null) ? (" with grant to " + _Grant.Grantee.EmailAddress) : ((_GrantCannedAcl != null) ? (" with canned ACL " + _GrantCannedAcl.Value) : string.Empty);
+                    Program.Log(Environment.NewLine + "Start Sync from " + sourceRegionBucketAndPrefix + " to " + targetRegionBucketAndPrefix + grantDisplayString);
                     // initialize the source bucket objects window
                     _SourceBucketObjectsWindow = new BucketObjectsWindow(sourceRegionBucketAndPrefix, _State.SourceBatchId, _State.LastKeyOfLastBatchCompleted, _GrantCannedAcl);
                     // initialize the target bucket objects window
@@ -313,7 +315,7 @@ Logging and Saved State:
 #if DEBUG
                 Debugger.Break();
 #endif
-                Program.Exception("FATAL PROGRAM ERROR: ", ex);
+                Program.Error("FATAL PROGRAM ERROR: " + ex.ToString());
             }
         }
         private static string AddCommonPrefix(string bucketAndPrefix, string cp)
@@ -347,7 +349,7 @@ Logging and Saved State:
         /// </summary>
         private static S3CannedACL CreateS3CannedACL(string cannedAclName)
         {
-            switch (cannedAclName.ToLowerInvariant())
+            switch ((cannedAclName ?? string.Empty).ToLowerInvariant())
             {
                 case "authenticated-read": return S3CannedACL.AuthenticatedRead;
                 case "aws-exec-read": return S3CannedACL.AWSExecRead;
@@ -765,8 +767,11 @@ Logging and Saved State:
                 }
                 if (level == 2)
                 {
-                    list.Add(leastCopy);
-                    if (!String.Equals(leastCopy.Description, greatestCopy.Description)) list.Add(greatestCopy);
+                    if (leastCopy != null)
+                    {
+                        list.Add(leastCopy);
+                        if (!String.Equals(leastCopy.Description, greatestCopy.Description)) list.Add(greatestCopy);
+                    }
                 }
                 list.Sort((a,b) => String.CompareOrdinal(a.Description, b.Description));
                 foreach (OperationTracker operation in list)
