@@ -30,7 +30,6 @@ namespace S3BucketSync
         private readonly string _sourceRegionBucketAndPrefix;
         private readonly string _targetRegionBucketAndPrefix;
         private readonly string _grant;
-        private readonly S3CannedACL _grantCannedAcl;
         private readonly DateTime _startDate;
         // everything after this is interlocked
         private long _unrecordedTimeStartTicks;
@@ -62,14 +61,12 @@ namespace S3BucketSync
         /// </summary>
         /// <param name="sourceRegionBucketAndPrefix">The source region, bucket, and prefix.</param>
         /// <param name="targetRegionBucketAndPrefix">The target region, bucket, and prefix.</param>
-        /// <param name="cannedAcl">A <see cref="S3CannedACL"/> to use to assign rights to the target file.</param>
-        /// <param name="grant">A <see cref="S3Grant"/> indicating rights being granted to the target file.</param>
-        public State(string sourceRegionBucketAndPrefix, string targetRegionBucketAndPrefix, S3CannedACL cannedAcl, S3Grant grant)
+        /// <param name="grant">A string indicating rights being granted to the target file.</param>
+        public State(string sourceRegionBucketAndPrefix, string targetRegionBucketAndPrefix, string grant)
         {
             _sourceRegionBucketAndPrefix = sourceRegionBucketAndPrefix;
             _targetRegionBucketAndPrefix = targetRegionBucketAndPrefix;
-            _grant = (grant == null ? "none" : grant.Grantee.EmailAddress);
-            _grantCannedAcl = cannedAcl;
+            _grant = grant;
             _startDate = DateTime.UtcNow;
             _unrecordedTimeStartTicks = _startDate.Ticks;
             _ticksUsed = 0;
@@ -122,7 +119,6 @@ namespace S3BucketSync
             str.AppendFormat("Latest Copied Object Date: {0}{1}", new DateTime(_latestCopiedDate), Environment.NewLine);
             str.AppendFormat("Latest Updated Object Date: {0}{1}", new DateTime(_latestUpdatedDate), Environment.NewLine);
             if (_grant != null) str.AppendFormat("Grant: {0}{1}", _grant, Environment.NewLine);
-            if (_grantCannedAcl != null) str.AppendFormat("GrantACL: {0}{1}", _grantCannedAcl.Value, Environment.NewLine);
             str.AppendLine();
             return str.ToString();
         }
@@ -130,6 +126,13 @@ namespace S3BucketSync
         /// Gets the amount of time used doing the synchronization.
         /// </summary>
         public TimeSpan TimeUsed {  get { return new TimeSpan(_ticksUsed + DateTime.UtcNow.Ticks - _unrecordedTimeStartTicks); } }
+        /// <summary>
+        /// Gets the grant string.
+        /// </summary>
+        public string GrantString
+        {
+            get { return _grant; }
+        }
         /// <summary>
         /// Gets the source continuation token, which tracks the next batch of source items needing to be processed.
         /// </summary>
