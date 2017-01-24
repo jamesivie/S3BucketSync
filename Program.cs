@@ -747,8 +747,11 @@ Logging and Saved State:
                 }
                 if (level == 2)
                 {
-                    list.Add(leastCopy);
-                    if (!String.Equals(leastCopy.Description, greatestCopy.Description)) list.Add(greatestCopy);
+                    if (leastCopy != null)
+                    {
+                        list.Add(leastCopy);
+                        if (!String.Equals(leastCopy.Description, greatestCopy.Description)) list.Add(greatestCopy);
+                    }
                 }
                 list.Sort((a,b) => String.CompareOrdinal(a.Description, b.Description));
                 foreach (OperationTracker operation in list)
