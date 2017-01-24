@@ -43,6 +43,8 @@ namespace S3BucketSync
         static private int _ObjectsProcessedThisRun;    // interlocked
         static private int _TimeoutSeconds = 60 * 60;   // the default timeout is 60 minutes
         static private int _RetryCount = 4;
+        static private int _BatchesToQueue = 250;
+        static private int _ConcurrentCopies = 10000;
 
         /// <summary>
         /// Gets the <see cref="State"/> object so we can save where we are and what we've accomplished.
@@ -80,6 +82,8 @@ Options:
     -g grants the account represented by the email full rights
     -t is the copy timeout in seconds (the default is 60 minutes)
     -r is the batch retry count (the default is 4)
+    -q is the maximum number of batches to queue (default is 250)
+    -c is the maximum number of concurrent copies to allow before preventing new batches (default is 10,000)
 
 Examples:
     S3BucketSync us-east-1:main us-west-2:backup /files
@@ -151,6 +155,20 @@ Logging and Saved State:
                             if (!Int32.TryParse(arg, out _RetryCount)) throw new ArgumentException("The retry count must contain only decimal digits!");
                             ++narg;
                         }
+                        else if (argument.ToLowerInvariant().StartsWith("-q"))
+                        {
+                            if (narg + 1 >= args.Length) throw new ArgumentException("-q must be followed by the number of batches to queue before waiting for previous batches to finish!");
+                            string arg = args[narg + 1];
+                            if (!Int32.TryParse(arg, out _BatchesToQueue)) throw new ArgumentException("The batch queue count must contain only decimal digits!");
+                            ++narg;
+                        }
+                        else if (argument.ToLowerInvariant().StartsWith("-c"))
+                        {
+                            if (narg + 1 >= args.Length) throw new ArgumentException("-c must be followed by the number of concurrent copies to allow before waiting to start new batches!");
+                            string arg = args[narg + 1];
+                            if (!Int32.TryParse(arg, out _ConcurrentCopies)) throw new ArgumentException("The concurrent copy count must contain only decimal digits!");
+                            ++narg;
+                        }
                     }
                     else if (string.IsNullOrEmpty(sourceRegionBucketAndPrefix)) sourceRegionBucketAndPrefix = argument;
                     else if (string.IsNullOrEmpty(targetRegionBucketAndPrefix)) targetRegionBucketAndPrefix = argument;
@@ -217,8 +235,8 @@ Logging and Saved State:
                     {
                         // bump up our priority (we're the most important because we feed everything else)
                         Thread.CurrentThread.Priority = ThreadPriority.Highest;
-                        // keep making requests for more lists of objects until we have 100 buffered (100,000 pending objects)
-                        int batchesToQueue = 100;
+                        // keep making requests for more lists of objects until we have _BatchesToQueue buffered (1,000 x _BatchesToQueue pending objects)
+                        int batchesToQueue = _BatchesToQueue;
                         // loop until we have processed all the objects or a key is pressed
                         while (!_SourceBucketObjectsWindow.LastBatchHasBeenRead)
                         {
@@ -448,7 +466,8 @@ Logging and Saved State:
                     // wait for the previous previous batch to complete before we start the next one
                     using (TrackOperation("PROCESS: Waiting for batch processing and copies to complete before continuing"))
                     {
-                        while (_batchesProcessing * 100 + _TargetBucketObjectsWindow.CopiesInProgress > 2000)
+                        // each batch processing exerts significant load on the system as well, with management of up to 1000 copies, so we'll count each of those the same as 100 copies
+                        while (_batchesProcessing * 100 + _TargetBucketObjectsWindow.CopiesInProgress > _ConcurrentCopies)
                         {
                             Thread.Sleep(100);
                             if (_Abort != 0) return;
@@ -487,8 +506,8 @@ Logging and Saved State:
                             try
                             {
                                 List<Task> tasks = new List<Task>();
-                                // loop for retries (the actual number of retries should be controlled inside the loop)
-                                for (int retry = 0; retry < 10000; ++retry)
+                                // loop for retries (the actual number of retries SHOULD be controlled inside the loop, but we'll put a somewhat reasonable number here just in case)
+                                for (int retry = 0; retry < 9999; ++retry)
                                 {
                                     try
                                     {
@@ -504,6 +523,7 @@ Logging and Saved State:
                                                 if (_Abort != 0) return;
                                             }
                                         }
+                                        // don't copy anything updated in the last 15 minutes (this prevents us copying things that AWS is already replicating--without it, we seem to copy items that were generated during the processing)
                                         DateTime modificationCutoffTime = DateTime.UtcNow.AddMinutes(-15);
                                         using (TrackOperation("PROCESS: Checking batch " + batch.BatchId + retryString))
                                         {
