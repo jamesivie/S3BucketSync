@@ -127,7 +127,7 @@ Logging and Saved State:
                             string arg = args[narg + 1];
                             S3CannedACL cannedAcl = CreateS3CannedACL(arg);
                             // A supported canned ACL?
-                            if (cannedAcl == null)
+                            if (cannedAcl != null)
                             {
                                 _GrantCannedAcl = cannedAcl;
                             }
@@ -172,7 +172,8 @@ Logging and Saved State:
                 using (_Log = new StreamWriter(_LogFilePath, true, Encoding.UTF8))
                 using (_Error = new StreamWriter(_ErrorFilePath, true, Encoding.UTF8))
                 {
-                    Program.Log(Environment.NewLine + "Start Sync from " + sourceRegionBucketAndPrefix + " to " + targetRegionBucketAndPrefix);
+                    string grantString = (_Grant != null) ? (" with grant to " + _Grant.Grantee.EmailAddress) : ((_GrantCannedAcl != null) ? (" with canned ACL " + _GrantCannedAcl.Value) : string.Empty);
+                    Program.Log(Environment.NewLine + "Start Sync from " + sourceRegionBucketAndPrefix + " to " + targetRegionBucketAndPrefix + grantString);
                     // possible resume?
                     if (!reset)
                     {
@@ -724,6 +725,7 @@ Logging and Saved State:
             operations.AppendLine("Batches Complete: " + _TargetBucketObjectsWindow.MostRecentlyDequeuedBatchId);
             operations.AppendLine("Objects Processed: " + _ObjectsProcessedThisRun + "/" + _SourceObjectsReadThisRun);
             operations.AppendLine("Objects Compared: " + _TargetObjectsReadThisRun);
+
             if (level > 1)
             {
                 List<OperationTracker> list = new List<OperationTracker>();
