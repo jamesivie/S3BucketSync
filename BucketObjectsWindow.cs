@@ -306,6 +306,7 @@ namespace S3BucketSync
                             }
                             catch (AmazonS3Exception ex)
                             {
+                                Program.LogVerbose("Error attempting copy of " + sourceObject.BucketName + "/" + sourceObject.Key  + " to " + _bucket + "/" + _prefix + key + ex.ToString());
                                 if (ex.Message != "The specified key does not exist.")
                                 {
                                     throw;
