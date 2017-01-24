@@ -297,7 +297,7 @@ Logging and Saved State:
 #if DEBUG
                 Debugger.Break();
 #endif
-                Program.Exception("FATAL PROGRAM ERROR: ", ex);
+                Program.Error("FATAL PROGRAM ERROR: " + ex.ToString());
             }
         }
         private static string AddCommonPrefix(string bucketAndPrefix, string cp)
