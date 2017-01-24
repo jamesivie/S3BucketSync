@@ -331,7 +331,7 @@ Logging and Saved State:
         /// </summary>
         private static S3CannedACL CreateS3CannedACL(string cannedAclName)
         {
-            switch (cannedAclName.ToLowerInvariant())
+            switch ((cannedAclName ?? string.Empty).ToLowerInvariant())
             {
                 case "authenticated-read": return S3CannedACL.AuthenticatedRead;
                 case "aws-exec-read": return S3CannedACL.AWSExecRead;
