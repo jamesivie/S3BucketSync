@@ -731,17 +731,20 @@ Logging and Saved State:
                 OperationTracker greatestCopy = null;
                 foreach (OperationTracker operation in OperationTracker.EnumerateOperationsInProgress)
                 {
-                    if (leastCopy == null || String.CompareOrdinal(operation.Description, leastCopy.Description) < 0) leastCopy = operation;
-                    if (greatestCopy == null || String.CompareOrdinal(operation.Description, greatestCopy.Description) > 0) greatestCopy = operation;
                     if (level > 2 || !operation.Description.StartsWith("COPY:"))
                     {
                         list.Add(operation);
+                    }
+                    else
+                    {
+                        if (leastCopy == null || String.CompareOrdinal(operation.Description, leastCopy.Description) < 0) leastCopy = operation;
+                        if (greatestCopy == null || String.CompareOrdinal(operation.Description, greatestCopy.Description) > 0) greatestCopy = operation;
                     }
                 }
                 if (level == 2)
                 {
                     list.Add(leastCopy);
-                    if (leastCopy != greatestCopy) list.Add(greatestCopy);
+                    if (!String.Equals(leastCopy.Description, greatestCopy.Description)) list.Add(greatestCopy);
                 }
                 list.Sort((a,b) => String.CompareOrdinal(a.Description, b.Description));
                 foreach (OperationTracker operation in list)

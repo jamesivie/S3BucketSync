@@ -280,6 +280,7 @@ namespace S3BucketSync
                                 // create the copy request object RIGHT before we issue the command because otherwise AWS may think that system clocks are out of sync
                                 CopyObjectRequest request = new CopyObjectRequest();
                                 request.Timeout = TimeSpan.FromSeconds(Program.TimeoutSeconds);
+                                request.ReadWriteTimeout = TimeSpan.FromSeconds(Program.TimeoutSeconds);
                                 request.SourceBucket = sourceObject.BucketName;
                                 request.SourceKey = sourceObject.Key;
                                 request.DestinationBucket = _bucket;
