@@ -41,7 +41,7 @@ namespace S3BucketSync
         static private int _SourceObjectsReadThisRun;    // interlocked
         static private int _TargetObjectsReadThisRun;    // interlocked
         static private int _ObjectsProcessedThisRun;    // interlocked
-        static private int _TimeoutSeconds = 60 * 60;   // the default timeout is 60 minutes
+        static private int _TimeoutSeconds = 10 * 60;   // the default timeout is 10 minutes
         static private int _RetryCount = 4;
 
         /// <summary>
@@ -79,7 +79,7 @@ Options:
     -b means restart at the beginning, ignore any saved state
     -v means output extra messages to see more details of what's going on
     -g grants the account represented by the email full rights
-    -t is the copy timeout in seconds (the default is 60 minutes)
+    -t is the copy timeout in seconds (the default is 10 minutes)
     -r is the batch retry count (the default is 4)
 
 Examples:
@@ -191,7 +191,7 @@ Logging and Saved State:
                     {
                         _Grant = CreateS3Grant(grantString);
                     }
-                    string grantDisplayString = (_State.GrantString != null) ? (" with grant to " + _Grant.Grantee.EmailAddress) : ((_GrantCannedAcl != null) ? (" with canned ACL " + _GrantCannedAcl.Value) : string.Empty);
+                    string grantDisplayString = (_Grant != null) ? (" with grant to " + _Grant.Grantee.EmailAddress) : ((_GrantCannedAcl != null) ? (" with canned ACL " + _GrantCannedAcl.Value) : string.Empty);
                     Program.Log(Environment.NewLine + "Start Sync from " + sourceRegionBucketAndPrefix + " to " + targetRegionBucketAndPrefix + grantDisplayString);
                     // initialize the source bucket objects window
                     _SourceBucketObjectsWindow = new BucketObjectsWindow(sourceRegionBucketAndPrefix, _State.SourceBatchId, _State.LastKeyOfLastBatchCompleted, _GrantCannedAcl);
