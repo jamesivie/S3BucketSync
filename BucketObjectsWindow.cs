@@ -301,6 +301,8 @@ namespace S3BucketSync
                                 string operation = String.Format("{0}.{1} {2} ({3:F0}MB:{4})", batch.BatchId, objectNumber, (targetObject == null) ? "copied" : "updated", sourceObject.Size / 1000000.0, key);
                                 if (targetObject != null) operation += " " + sourceObject.ETag + " vs " + targetObject.ETag;
                                 Program.LogVerbose(operation);
+                                // track what the operation we just completed successfully
+                                Program.State.TrackObject(sourceObject, targetObject == null, targetObject != null);
                             }
                             catch (AmazonS3Exception ex)
                             {
@@ -313,8 +315,6 @@ namespace S3BucketSync
                             finally
                             {
                                 Interlocked.Decrement(ref _copiesInProgress);
-                                // track what the operation we just completed
-                                Program.State.TrackObject(sourceObject, targetObject == null, targetObject != null);
                             }
                         });
                 }
