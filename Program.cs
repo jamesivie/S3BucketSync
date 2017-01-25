@@ -405,18 +405,18 @@ Logging and Saved State:
                         // do we need to expand the target window?
                         if (String.CompareOrdinal(_SourceBucketObjectsWindow.UnprefixedGreatestKey, _TargetBucketObjectsWindow.UnprefixedGreatestKey) > 0)
                         {
-                            int queries = 0;
-                            int objectsRead = 0;
                             using (TrackOperation("RANGESYNC: Expanding target window to include batch " + _TargetBucketObjectsWindow.LastQueuedBatchId.ToString() + " (" + _TargetBucketObjectsWindow.UnprefixedGreatestKey + " to " + _SourceBucketObjectsWindow.UnprefixedGreatestKey + ")"))
                             {
                                 do
                                 {
-                                    objectsRead += _TargetBucketObjectsWindow.ReadNextBatch();
-                                    if (objectsRead > 0) ++queries;
+                                    int objectsRead = _TargetBucketObjectsWindow.ReadNextBatch();
+                                    if (objectsRead > 0)
+                                    {
+                                        _State.RecordQueries(false);
+                                        Interlocked.Add(ref _TargetObjectsReadThisRun, objectsRead);
+                                    }
                                 } while (String.CompareOrdinal(_SourceBucketObjectsWindow.UnprefixedGreatestKey, _TargetBucketObjectsWindow.UnprefixedGreatestKey) > 0 && _Abort == 0);
                             }
-                            Interlocked.Add(ref _TargetObjectsReadThisRun, objectsRead);
-                            _State.RecordQueries(false, queries);
                             // don't sleep, we may need to expand more right now!
                             continue;
                         }
