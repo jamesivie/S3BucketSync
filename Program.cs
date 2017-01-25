@@ -38,9 +38,10 @@ namespace S3BucketSync
         static private S3CannedACL _GrantCannedAcl;
         static private S3Grant _Grant;
         static private Exception _AsyncException;
-        static private int _SourceObjectsReadThisRun;    // interlocked
-        static private int _TargetObjectsReadThisRun;    // interlocked
+        static private int _SourceObjectsReadThisRun;   // interlocked
+        static private int _TargetObjectsReadThisRun;   // interlocked
         static private int _ObjectsProcessedThisRun;    // interlocked
+        static private int _PendingCompares;            // interlocked
         static private int _TimeoutSeconds = 10 * 60;   // the default timeout is 10 minutes
         static private int _RetryCount = 4;
         static private int _BatchesToQueue = 250;
@@ -468,8 +469,8 @@ Logging and Saved State:
                     // wait for the previous previous batch to complete before we start the next one
                     using (TrackOperation("PROCESS: Waiting for batch processing and copies to complete before continuing"))
                     {
-                        // each batch processing exerts significant load on the system as well, with management of up to 1000 copies, so we'll count each of those the same as 100 copies
-                        while (_batchesProcessing * 100 + _TargetBucketObjectsWindow.CopiesInProgress > _ConcurrentCopies)
+                        // add up the number of pending compares (each of which could turn into a copy) to the number of actual copies in progress and limit the total concurrency using that number
+                        while (_PendingCompares + _TargetBucketObjectsWindow.CopiesInProgress > _ConcurrentCopies)
                         {
                             Thread.Sleep(100);
                             if (_Abort != 0) return;
@@ -502,6 +503,9 @@ Logging and Saved State:
                     Task previousBatchCompletedCopy = previousBatchCompleted;
                     // we are now processing this batch (do this synchronously in this loop to make sure that we're keeping track of the number of batch processing tasks that have been issued, not the number that have started processing--this should help prevent later batches from superceding earlier batches)
                     Interlocked.Increment(ref _batchesProcessing);
+                    // add pending compares (these could turn into copies and we don't want to overshoot the concurrency by starting up millions of copies from thousands of batches before any of them start
+                    int pendingSubtract = batch.Response.S3Objects.Count;
+                    Interlocked.Add(ref _PendingCompares, pendingSubtract);
                     // create a task to check all the objects, queue copy operations if needed, and wait until the batch is completely synchronized
                     Task batchCompleteTask = Task.Run(async () =>
                         {
@@ -554,6 +558,9 @@ Logging and Saved State:
                                             }
                                             Program.LogVerbose("Batch " + batch.BatchId + ": " + tasks.Count + " objects need updating (" + batch.LeastKey + "-" + batch.GreatestKey);
                                         }
+                                        // we've now either started a copy or know that we don't need one for each source item
+                                        Interlocked.Add(ref _PendingCompares, -pendingSubtract);
+                                        pendingSubtract = 0;
                                         // this batch is complete only when the previous batch is complete and all the file copies finish
                                         using (TrackOperation("PROCESS: Waiting for batch " + batch.BatchId + retryString))
                                         {
@@ -603,6 +610,8 @@ Logging and Saved State:
                             {
                                 // we are done processing this batch
                                 Interlocked.Decrement(ref _batchesProcessing);
+                                // subtract off any remaining pending items in case we didn't get to the part where we queued them
+                                Interlocked.Add(ref _PendingCompares, -pendingSubtract);
                             }
                         });
                     // this batch is now the previous batch
