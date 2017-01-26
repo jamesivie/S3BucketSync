@@ -45,6 +45,7 @@ namespace S3BucketSync
         private int _lastBatchHasBeenRead;
         private int _dequeuedBatchId;
         private int _lastQueuedBatchId;
+        private int _copiesInProgress;
         private string _unprefixedLeastKey;
         private string _unprefixedGreatestKey;
         private string _startAtKey;
@@ -273,6 +274,7 @@ namespace S3BucketSync
                     // return a task for the copy operation
                     return Task.Run(async () =>
                         {
+                            string paddedBatchId = batch.BatchId.ToString().PadLeft(6, ' ');
                             for (int taskStarvationSilentRetry = 0; taskStarvationSilentRetry < 5; ++taskStarvationSilentRetry)
                             {
                                 try
@@ -296,7 +298,6 @@ namespace S3BucketSync
                                         request.Grants.Add(_grant);
                                     }
                                     Program.State.AddChargeForCopies(1);
-                                    string paddedBatchId = batch.BatchId.ToString().PadLeft(6, ' ');
                                     using (Program.TrackOperation("COPY " + paddedBatchId + "." + objectNumber.ToString("000") + ": " + key + " (" + (sourceObject.Size + 500000) / 1000000 + "MB)"))
                                     {
                                         await _s3.CopyObjectAsync(request, cancel);
@@ -344,7 +345,6 @@ namespace S3BucketSync
         /// </summary>
         public string LastQuery { get { return _lastQuery; } }
 
-        private int _copiesInProgress;
         /// <summary>
         /// Gets the number of copies currently in progress.
         /// </summary>

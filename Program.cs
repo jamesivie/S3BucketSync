@@ -22,6 +22,17 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 */
 namespace S3BucketSync
 {
+    /*
+     * Possible enhancement: rather than a single sequential pass copying the data, what if we separated the compare and copy states and grouped copies within specified key ranges, limiting the number of THOSE that were pending and maintaining separate bookmarks within each of those,
+     * maybe only bookmark the earliest unfinished copy and do it synchronously if it's too far behind?
+     * 
+     * 
+     * */
+
+
+
+
+
     class Program
     {
         static private int _Abort = 0;       // interlocked
@@ -522,97 +533,100 @@ Logging and Saved State:
                             {
                                 string paddedBatchId = batch.BatchId.ToString().PadLeft(6, ' ');
                                 List<Task> tasks = new List<Task>();
-                                // loop for retries (the actual number of retries SHOULD be controlled inside the loop, but we'll put a somewhat reasonable number here just in case)
-                                for (int retry = 0; retry < 9999; ++retry)
+                                using (Program.TrackOperation("BATCHCOMPLETION " + paddedBatchId + ": ", () => BatchStatus(tasks)))
                                 {
-                                    try
+                                    // loop for retries (the actual number of retries SHOULD be controlled inside the loop, but we'll put a somewhat reasonable number here just in case)
+                                    for (int retry = 0; retry < 9999; ++retry)
                                     {
-                                        string retryString = ((retry > 0) ? "" : (" retry " + retry.ToString()));
-                                        // get the last (greatest) key in the batch
-                                        string lastKey = batch.GreatestKey;
-                                        using (TrackOperation("BATCH " + paddedBatchId + ": Waiting for target window to include " + lastKey + retryString))
+                                        try
                                         {
-                                            // wait until the target window ready to process all the items in this batch (it almost always should be ready to go already)
-                                            while (String.CompareOrdinal(lastKey, _TargetBucketObjectsWindow.UnprefixedGreatestKey) > 0)
+                                            string retryString = ((retry > 0) ? "" : (" retry " + retry.ToString()));
+                                            // get the last (greatest) key in the batch
+                                            string lastKey = batch.GreatestKey;
+                                            using (TrackOperation("BATCH " + paddedBatchId + ": Waiting for target window to include " + lastKey + retryString))
                                             {
-                                                await Task.Delay(100);
-                                                if (_Abort != 0) return;
+                                                // wait until the target window ready to process all the items in this batch (it almost always should be ready to go already)
+                                                while (String.CompareOrdinal(lastKey, _TargetBucketObjectsWindow.UnprefixedGreatestKey) > 0)
+                                                {
+                                                    await Task.Delay(100);
+                                                    if (_Abort != 0) return;
+                                                }
+                                            }
+                                            // don't copy anything updated in the last 15 minutes (this prevents us copying things that AWS is already replicating--without it, we seem to copy items that were generated during the processing)
+                                            DateTime modificationCutoffTime = DateTime.UtcNow.AddMinutes(-15);
+                                            using (TrackOperation("BATCH " + paddedBatchId + ": Comparing files" + retryString))
+                                            {
+                                                List<S3Object> objects = batch.Response.S3Objects;
+                                                int count = objects.Count;
+                                                for (int n = 0; n < count; ++n)
+                                                {
+                                                    // has this object been created or modified in the past 15 minutes? skip this one, as AWS may be in the process of replicating it
+                                                    if (objects[n].LastModified > modificationCutoffTime)
+                                                    {
+                                                        Interlocked.Increment(ref _ObjectsProcessedThisRun);
+                                                        continue;
+                                                    }
+                                                    string unprefixedKey = objects[n].Key.Substring(sourcePrefix.Length);
+                                                    Task copyOperation = _TargetBucketObjectsWindow.UpdateObjectIfNeeded(batch, n, unprefixedKey);
+                                                    // if there was async processing necessary, add it to the list of tasks
+                                                    if (copyOperation != null)
+                                                    {
+                                                        tasks.Add(copyOperation);
+                                                    }
+                                                    else // no copy needed--this one has finished being processed so count it now
+                                                    {
+                                                        Interlocked.Increment(ref _ObjectsProcessedThisRun);
+                                                    }
+                                                    if (_Abort != 0) return;
+                                                }
+                                                Program.LogVerbose("Batch " + batch.BatchId.ToString() + ": " + tasks.Count + " objects need updating (" + batch.LeastKey + "-" + batch.GreatestKey);
+                                            }
+                                            // we've now either started a copy or know that we don't need one for each source item
+                                            Interlocked.Add(ref _PendingCompares, -pendingSubtract);
+                                            pendingSubtract = 0;
+                                            // this batch is complete only when the previous batch is complete and all the file copies finish
+                                            using (TrackOperation("BATCH " + paddedBatchId + ": Waiting for updates" + retryString))
+                                            {
+                                                // wait for the tasks and catch any exceptions from them
+                                                await Task.WhenAll(tasks);
+                                            }
+                                            using (TrackOperation("BATCH " + paddedBatchId + ": Waiting for previous batch" + retryString))
+                                            {
+                                                await previousBatchCompletedCopy;
+                                            }
+                                            using (TrackOperation("BATCH " + paddedBatchId + ": Finishing batch" + retryString))
+                                            {
+                                                // this batch is done, tell the window we're done processing this batch
+                                                _SourceBucketObjectsWindow.MarkBatchProcessed(batch);
+                                                // save the batch completion information into the state
+                                                _State.TrackBatchCompletion(_SourceBucketObjectsWindow.Prefix, batch);
+                                                // save the state just in case we crash
+                                                _State.Save(_StateFilePath);
+                                                // successful finish--no need to rerun
+                                                break;
                                             }
                                         }
-                                        // don't copy anything updated in the last 15 minutes (this prevents us copying things that AWS is already replicating--without it, we seem to copy items that were generated during the processing)
-                                        DateTime modificationCutoffTime = DateTime.UtcNow.AddMinutes(-15);
-                                        using (TrackOperation("BATCH " + paddedBatchId + ": Comparing files" + retryString))
+                                        catch (Exception ex)
                                         {
-                                            List<S3Object> objects = batch.Response.S3Objects;
-                                            int count = objects.Count;
-                                            for (int n = 0; n < count; ++n)
+                                            // retry this batch up to the configured number of times in addition to the initial run before reporting an error
+                                            if (retry <= _RetryCount)
                                             {
-                                                // has this object been created or modified in the past 15 minutes? skip this one, as AWS may be in the process of replicating it
-                                                if (objects[n].LastModified > modificationCutoffTime)
-                                                {
-                                                    Interlocked.Increment(ref _ObjectsProcessedThisRun);
-                                                    continue;
-                                                }
-                                                string unprefixedKey = objects[n].Key.Substring(sourcePrefix.Length);
-                                                Task copyOperation = _TargetBucketObjectsWindow.UpdateObjectIfNeeded(batch, n, unprefixedKey);
-                                                // if there was async processing necessary, add it to the list of tasks
-                                                if (copyOperation != null)
-                                                {
-                                                    tasks.Add(copyOperation);
-                                                }
-                                                else // no copy needed--this one has finished being processed so count it now
-                                                {
-                                                    Interlocked.Increment(ref _ObjectsProcessedThisRun);
-                                                }
-                                                if (_Abort != 0) return;
+                                                Program.Log("Batch " + batch.BatchId + " has failed.  Retry #" + (retry + 1).ToString() + " beginning: " + ex.ToString());
+                                                // clear the task list so we can try again
+                                                tasks.Clear();
+                                                continue;
                                             }
-                                            Program.LogVerbose("Batch " + batch.BatchId.ToString() + ": " + tasks.Count + " objects need updating (" + batch.LeastKey + "-" + batch.GreatestKey);
+                                            else
+                                            {
+                                                Program.Error("Batch " + batch.BatchId + " has failed " + retry.ToString() + " times.  The process will need to be rerun after the problem is corrected: " + ex.ToString());
+                                                throw;
+                                            }
                                         }
-                                        // we've now either started a copy or know that we don't need one for each source item
-                                        Interlocked.Add(ref _PendingCompares, -pendingSubtract);
-                                        pendingSubtract = 0;
-                                        // this batch is complete only when the previous batch is complete and all the file copies finish
-                                        using (TrackOperation("BATCH " + paddedBatchId + ": Waiting for updates" + retryString))
+                                        finally
                                         {
-                                            // wait for the tasks and catch any exceptions from them
-                                            await Task.WhenAll(tasks);
+                                            // add in the objects that needed to be copied
+                                            Interlocked.Add(ref _ObjectsProcessedThisRun, tasks.Count);
                                         }
-                                        using (TrackOperation("BATCH " + paddedBatchId + ": Waiting for previous batch" + retryString))
-                                        {
-                                            await previousBatchCompletedCopy;
-                                        }
-                                        using (TrackOperation("BATCH " + paddedBatchId + ": Finishing batch" + retryString))
-                                        {
-                                            // this batch is done, tell the window we're done processing this batch
-                                            _SourceBucketObjectsWindow.MarkBatchProcessed(batch);
-                                            // save the batch completion information into the state
-                                            _State.TrackBatchCompletion(_SourceBucketObjectsWindow.Prefix, batch);
-                                            // save the state just in case we crash
-                                            _State.Save(_StateFilePath);
-                                            // successful finish--no need to rerun
-                                            break;
-                                        }
-                                    }
-                                    catch (Exception ex)
-                                    {
-                                        // retry this batch up to the configured number of times in addition to the initial run before reporting an error
-                                        if (retry <= _RetryCount)
-                                        {
-                                            Program.Log("Batch " + batch.BatchId + " has failed.  Retry #" + (retry + 1).ToString() + " beginning: " + ex.ToString());
-                                            // clear the task list so we can try again
-                                            tasks.Clear();
-                                            continue;
-                                        }
-                                        else
-                                        {
-                                            Program.Error("Batch " + batch.BatchId + " has failed " + retry.ToString() + " times.  The process will need to be rerun after the problem is corrected: " + ex.ToString());
-                                            throw;
-                                        }
-                                    }
-                                    finally
-                                    {
-                                        // add in the objects that needed to be copied
-                                        Interlocked.Add(ref _ObjectsProcessedThisRun, tasks.Count);
                                     }
                                 }
                             }
@@ -631,6 +645,43 @@ Logging and Saved State:
                 catch (Exception e)
                 {
                     Program.Error("Exception processing items: " + e.ToString());
+                }
+            }
+        }
+        private static string BatchStatus(List<Task> tasks)
+        {
+            float total = tasks.Count;
+            int waiting;
+            int running;
+            int completed;
+            TaskStatuses(tasks, out waiting, out running, out completed);
+            return String.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:P0}/{1:P0}/{2:P0}", waiting / total, running / total, completed / total);
+        }
+    private static void TaskStatuses(List<Task> tasks, out int waiting, out int running, out int completed)
+        {
+            waiting = 0;
+            running = 0;
+            completed = 0;
+            foreach (Task t in tasks)
+            {
+                switch (t.Status)
+                {
+                    case TaskStatus.Created:
+                    case TaskStatus.WaitingForActivation:
+                    case TaskStatus.WaitingToRun:
+                        ++waiting;
+                        break;
+                    case TaskStatus.Running:
+                    case TaskStatus.WaitingForChildrenToComplete:
+                        ++running;
+                        break;
+                    case TaskStatus.Faulted:
+                    case TaskStatus.RanToCompletion:
+                    case TaskStatus.Canceled:
+                        ++completed;
+                        break;
+                    default:
+                        break;
                 }
             }
         }
@@ -806,8 +857,9 @@ Logging and Saved State:
         /// Tracks an operation using the specified key and description.
         /// </summary>
         /// <param name="description">A description for the operation that is still in progress.</param>
+        /// <param name="dynamicDescription">An optional function that provides a separate dynamically generated description.</param>
         /// <returns>A <see cref="IDisposable"/> object that will keep the description string in the list of operations in progress until it is disposed.</returns>
-        public static IDisposable TrackOperation(string description)
+        public static IDisposable TrackOperation(string description, Func<string> dynamicDescription = null)
         {
             return new OperationTracker(description);
         }
@@ -824,13 +876,15 @@ Logging and Saved State:
                 get { return _operationsInProgress.Keys; }
             }
 
-            private Stopwatch _timer = Stopwatch.StartNew();
-            private string _description;
+            private readonly Stopwatch _timer = Stopwatch.StartNew();
+            private readonly string _description;
+            private readonly Func<string> _dynamicDescription;
 
-            public OperationTracker(string description)
+            public OperationTracker(string description, Func<string> dynamicDescription = null)
             {
-                _description = description;
                 _operationsInProgress[this] = null;
+                _description = description;
+                _dynamicDescription = dynamicDescription;
             }
 
             /// <summary>
@@ -838,9 +892,13 @@ Logging and Saved State:
             /// </summary>
             public Stopwatch Stopwatch { get { return _timer; } }
             /// <summary>
-            /// Gets the description of this operation.
+            /// Gets the description of this operation.  This item is stable, so it can be used for sorting.
             /// </summary>
-            public string Description {  get { return _description; } }
+            public string Description { get { return _description; } }
+            /// <summary>
+            /// Gets the dynamic description of this operation.  This value is computed as it is called, so it can change and cannot not be used for sorting.
+            /// </summary>
+            public string DynamicDescription { get { return (_dynamicDescription == null) ? "" : _dynamicDescription(); } }
 
             /// <summary>
             /// Disposes of this instance.
