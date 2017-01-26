@@ -405,7 +405,7 @@ Logging and Saved State:
                         // do we need to expand the target window?
                         if (String.CompareOrdinal(_SourceBucketObjectsWindow.UnprefixedGreatestKey, _TargetBucketObjectsWindow.UnprefixedGreatestKey) > 0)
                         {
-                            using (TrackOperation("RANGESYNC: Expanding target window to include batch " + _TargetBucketObjectsWindow.LastQueuedBatchId.ToString() + " (" + _TargetBucketObjectsWindow.UnprefixedGreatestKey + " to " + _SourceBucketObjectsWindow.UnprefixedGreatestKey + ")"))
+                            using (TrackOperation("TARGET: Expanding target window to include batch " + _TargetBucketObjectsWindow.LastQueuedBatchId.ToString() + " (" + _TargetBucketObjectsWindow.UnprefixedGreatestKey + " to " + _SourceBucketObjectsWindow.UnprefixedGreatestKey + ")"))
                             {
                                 do
                                 {
@@ -424,13 +424,13 @@ Logging and Saved State:
                         else if (_SourceBucketObjectsWindow.UnprefixedLeastKey != lastTestedSourceWindowLeastKey && String.CompareOrdinal(_SourceBucketObjectsWindow.UnprefixedLeastKey, _TargetBucketObjectsWindow.UnprefixedLeastKey) > 0)
                         {
                             lastTestedSourceWindowLeastKey = _SourceBucketObjectsWindow.UnprefixedLeastKey;
-                            using (TrackOperation("RANGESYNC: Shrinking target window to " + lastTestedSourceWindowLeastKey))
+                            using (TrackOperation("TARGET: Shrinking target window to " + lastTestedSourceWindowLeastKey))
                             {
                                 _TargetBucketObjectsWindow.ShrinkWindow(lastTestedSourceWindowLeastKey);
                             }
                         }
                     }
-                    using (TrackOperation("RANGESYNC: Waiting for work"))
+                    using (TrackOperation("TARGET: Waiting for work"))
                     {
                         // wait a bit so we don't monopolize the CPU
                         Thread.Sleep(100);
@@ -467,7 +467,7 @@ Logging and Saved State:
                 try
                 {
                     // wait for the previous previous batch to complete before we start the next one
-                    using (TrackOperation("PROCESS: Waiting for batch processing and copies to complete before continuing"))
+                    using (TrackOperation("SOURCE: Waiting for batch processing and copies to complete before continuing"))
                     {
                         // add up the number of pending compares (each of which could turn into a copy) to the number of actual copies in progress and limit the total concurrency using that number
                         while (_PendingCompares + _TargetBucketObjectsWindow.CopiesInProgress > _ConcurrentCopies)
@@ -486,13 +486,13 @@ Logging and Saved State:
                         // has the last batch been read?  stop now, we're done!
                         if (_SourceBucketObjectsWindow.LastBatchHasBeenRead)
                         {
-                            using (TrackOperation("PROCESS: Complete: waiting for pending copies"))
+                            using (TrackOperation("SOURCE: Complete: waiting for pending copies"))
                             {
                                 previousBatchCompleted.Wait();
                             }
                             break;
                         }
-                        using (TrackOperation("PROCESS: Waiting for batches to queue"))
+                        using (TrackOperation("SOURCE: Waiting for batches to queue"))
                         {
                             // wait for a bit and try again
                             Thread.Sleep(100);
@@ -511,6 +511,7 @@ Logging and Saved State:
                         {
                             try
                             {
+                                string paddedBatchId = batch.BatchId.ToString().PadLeft(6, ' ');
                                 List<Task> tasks = new List<Task>();
                                 // loop for retries (the actual number of retries SHOULD be controlled inside the loop, but we'll put a somewhat reasonable number here just in case)
                                 for (int retry = 0; retry < 9999; ++retry)
@@ -520,7 +521,7 @@ Logging and Saved State:
                                         string retryString = ((retry > 0) ? "" : (" retry " + retry.ToString()));
                                         // get the last (greatest) key in the batch
                                         string lastKey = batch.GreatestKey;
-                                        using (TrackOperation("PROCESS: Waiting for target window to include " + lastKey + retryString))
+                                        using (TrackOperation("BATCH " + paddedBatchId + ": Waiting for target window to include " + lastKey + retryString))
                                         {
                                             // wait until the target window ready to process all the items in this batch (it almost always should be ready to go already)
                                             while (String.CompareOrdinal(lastKey, _TargetBucketObjectsWindow.UnprefixedGreatestKey) > 0)
@@ -531,7 +532,7 @@ Logging and Saved State:
                                         }
                                         // don't copy anything updated in the last 15 minutes (this prevents us copying things that AWS is already replicating--without it, we seem to copy items that were generated during the processing)
                                         DateTime modificationCutoffTime = DateTime.UtcNow.AddMinutes(-15);
-                                        using (TrackOperation("PROCESS: Checking batch " + batch.BatchId + retryString))
+                                        using (TrackOperation("BATCH " + paddedBatchId + ": Comparing files" + retryString))
                                         {
                                             List<S3Object> objects = batch.Response.S3Objects;
                                             int count = objects.Count;
@@ -556,22 +557,22 @@ Logging and Saved State:
                                                 }
                                                 if (_Abort != 0) return;
                                             }
-                                            Program.LogVerbose("Batch " + batch.BatchId + ": " + tasks.Count + " objects need updating (" + batch.LeastKey + "-" + batch.GreatestKey);
+                                            Program.LogVerbose("Batch " + batch.BatchId.ToString() + ": " + tasks.Count + " objects need updating (" + batch.LeastKey + "-" + batch.GreatestKey);
                                         }
                                         // we've now either started a copy or know that we don't need one for each source item
                                         Interlocked.Add(ref _PendingCompares, -pendingSubtract);
                                         pendingSubtract = 0;
                                         // this batch is complete only when the previous batch is complete and all the file copies finish
-                                        using (TrackOperation("PROCESS: Waiting for batch " + batch.BatchId + retryString))
+                                        using (TrackOperation("BATCH " + paddedBatchId + ": Waiting for updates" + retryString))
                                         {
                                             // wait for the tasks and catch any exceptions from them
                                             await Task.WhenAll(tasks);
                                         }
-                                        using (TrackOperation("PROCESS: Batch " + batch.BatchId + " waiting for previous batch" + retryString))
+                                        using (TrackOperation("BATCH " + paddedBatchId + ": Waiting for previous batch" + retryString))
                                         {
                                             await previousBatchCompletedCopy;
                                         }
-                                        using (TrackOperation("PROCESS: Finishing batch " + batch.BatchId + retryString))
+                                        using (TrackOperation("BATCH " + paddedBatchId + ": Finishing batch" + retryString))
                                         {
                                             // this batch is done, tell the window we're done processing this batch
                                             _SourceBucketObjectsWindow.MarkBatchProcessed(batch);
@@ -764,7 +765,7 @@ Logging and Saved State:
                 OperationTracker greatestCopy = null;
                 foreach (OperationTracker operation in OperationTracker.EnumerateOperationsInProgress)
                 {
-                    if (level > 2 || !operation.Description.StartsWith("COPY:"))
+                    if (level > 2 || !operation.Description.StartsWith("COPY "))
                     {
                         list.Add(operation);
                     }

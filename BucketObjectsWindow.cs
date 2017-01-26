@@ -294,7 +294,8 @@ namespace S3BucketSync
                                     request.Grants.Add(_grant);
                                 }
                                 Program.State.AddChargeForCopies(1);
-                                using (Program.TrackOperation("COPY: " + batch.BatchId.ToString("00000") + "." + objectNumber.ToString("000") + ": " + key + " (" + sourceObject.Size / 1000000 + "MB)"))
+                                string paddedBatchId = batch.BatchId.ToString().PadLeft(6, ' ');
+                                using (Program.TrackOperation("COPY " + paddedBatchId + "." + objectNumber.ToString("000") + ": " + key + " (" + (sourceObject.Size + 500000) / 1000000 + "MB)"))
                                 {
                                     await _s3.CopyObjectAsync(request, cancel);
                                 }
