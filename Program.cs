@@ -846,7 +846,7 @@ Logging and Saved State:
                 list.Sort((a,b) => String.CompareOrdinal(a.Description, b.Description));
                 foreach (OperationTracker operation in list)
                 {
-                    operations.AppendLine(operation.Description + " " + operation.Stopwatch.ElapsedMilliseconds.ToString() + "ms");
+                    operations.AppendLine(operation.Description + " " + operation.DynamicDescription + " " + operation.Stopwatch.ElapsedMilliseconds.ToString() + "ms");
                 }
             }
             operations.AppendLine();
