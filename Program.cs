@@ -462,14 +462,23 @@ Logging and Saved State:
             Task previousBatchCompleted = Task.FromResult(0);
             System.Diagnostics.Debug.Assert(previousBatchCompleted.IsCompleted);
             // loop until we've processed all the items
-            while (_Abort == 0)
+            for (long previousStarvedTasks = 0; (_Abort == 0); previousStarvedTasks = State.StarvedTasks)
             {
                 try
                 {
+                    // wait due to task starvation?
+                    long starvedTasks = State.StarvedTasks - previousStarvedTasks;
+                    if (starvedTasks > 10)
+                    {
+                        using (TrackOperation("SOURCE: Waiting for tasks to stop starving (" + starvedTasks.ToString() + " tasks starved this round)"))
+                        {
+                            Thread.Sleep(5000);
+                        }
+                    }
                     // wait for the previous previous batch to complete before we start the next one
                     using (TrackOperation("SOURCE: Waiting for batch processing and copies to complete before continuing"))
                     {
-                        // add up the number of pending compares (each of which could turn into a copy) to the number of actual copies in progress and limit the total concurrency using that number
+                        // add up 1000x the starved tasks in the last loop, the number of pending compares (each of which could turn into a copy) to the number of actual copies in progress and limit the total concurrency using that number
                         while (_PendingCompares + _TargetBucketObjectsWindow.CopiesInProgress > _ConcurrentCopies)
                         {
                             Thread.Sleep(100);

@@ -49,6 +49,7 @@ namespace S3BucketSync
         private long _objectsCopied;
         private long _objectsUpdated;
         private long _objects;
+        private long _starvedTasks;
         private int _sourceQueries;
         private int _targetQueries;
         private string _sourceContinuationToken;
@@ -151,6 +152,10 @@ namespace S3BucketSync
         /// Gets the <see cref="BatchIdCounter"/> for the source batch window.
         /// </summary>
         public BatchIdCounter SourceBatchId { get { return _sourceBatchId; } }
+        /// <summary>
+        /// Gets the number of tasks that have starved.
+        /// </summary>
+        public long StarvedTasks { get { return _starvedTasks; } }
 
         /// <summary>
         /// Records that a query took place.
@@ -177,6 +182,13 @@ namespace S3BucketSync
         {
             // $.005 / 1000 LIST requests  (we're assuming standard access files here)
             Interlocked.Add(ref _nanocents, 500L * numberOfQueries);
+        }
+        /// <summary>
+        /// Record an instance of task starvation.
+        /// </summary>
+        public void RecordTaskStarvation()
+        {
+            Interlocked.Increment(ref _starvedTasks);
         }
         /// <summary>
         /// Tracks the specified <see cref="S3Object"/>.

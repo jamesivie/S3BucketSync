@@ -273,50 +273,60 @@ namespace S3BucketSync
                     // return a task for the copy operation
                     return Task.Run(async () =>
                         {
-                            try
+                            for (int taskStarvationSilentRetry = 0; taskStarvationSilentRetry < 5; ++taskStarvationSilentRetry)
                             {
-                                Interlocked.Increment(ref _copiesInProgress);
-                                Stopwatch timer = Stopwatch.StartNew();
-                                // create the copy request object RIGHT before we issue the command because otherwise AWS may think that system clocks are out of sync
-                                CopyObjectRequest request = new CopyObjectRequest();
-                                request.Timeout = TimeSpan.FromSeconds(Program.TimeoutSeconds);
-                                request.ReadWriteTimeout = TimeSpan.FromSeconds(Program.TimeoutSeconds);
-                                request.SourceBucket = sourceObject.BucketName;
-                                request.SourceKey = sourceObject.Key;
-                                request.DestinationBucket = _bucket;
-                                request.DestinationKey = _prefix + key;
-                                if (_grantCannedAcl != null)
+                                try
                                 {
-                                    request.CannedACL = _grantCannedAcl;
+                                    Interlocked.Increment(ref _copiesInProgress);
+                                    Stopwatch timer = Stopwatch.StartNew();
+                                    // create the copy request object RIGHT before we issue the command because otherwise AWS may think that system clocks are out of sync
+                                    CopyObjectRequest request = new CopyObjectRequest();
+                                    request.Timeout = TimeSpan.FromSeconds(Program.TimeoutSeconds);
+                                    request.ReadWriteTimeout = TimeSpan.FromSeconds(Program.TimeoutSeconds);
+                                    request.SourceBucket = sourceObject.BucketName;
+                                    request.SourceKey = sourceObject.Key;
+                                    request.DestinationBucket = _bucket;
+                                    request.DestinationKey = _prefix + key;
+                                    if (_grantCannedAcl != null)
+                                    {
+                                        request.CannedACL = _grantCannedAcl;
+                                    }
+                                    else if (_grant != null)
+                                    {
+                                        request.Grants.Add(_grant);
+                                    }
+                                    Program.State.AddChargeForCopies(1);
+                                    string paddedBatchId = batch.BatchId.ToString().PadLeft(6, ' ');
+                                    using (Program.TrackOperation("COPY " + paddedBatchId + "." + objectNumber.ToString("000") + ": " + key + " (" + (sourceObject.Size + 500000) / 1000000 + "MB)"))
+                                    {
+                                        await _s3.CopyObjectAsync(request, cancel);
+                                    }
+                                    string operation = String.Format("{0}.{1} {2} ({3:F0}MB:{4})", batch.BatchId, objectNumber, (targetObject == null) ? "copied" : "updated", sourceObject.Size / 1000000.0, key);
+                                    if (targetObject != null) operation += " " + sourceObject.ETag + " vs " + targetObject.ETag;
+                                    Program.LogVerbose(operation);
+                                    // track what the operation we just completed successfully
+                                    Program.State.TrackObject(sourceObject, targetObject == null, targetObject != null);
+                                    break;
                                 }
-                                else if (_grant != null)
+                                catch (AmazonS3Exception ex)
                                 {
-                                    request.Grants.Add(_grant);
+                                    Program.LogVerbose("Error attempting copy of " + sourceObject.BucketName + "/" + sourceObject.Key + " to " + _bucket + "/" + _prefix + key + ex.ToString());
+                                    if (ex.Message.StartsWith("The difference between the request time and the current time is too large"))
+                                    {
+                                        Program.State.RecordTaskStarvation();
+                                        // for this one exception just retry with a new timestamp--it means that the async task scheduler didn't schedule us for a long time
+                                        continue;
+                                    }
+                                    if (ex.Message != "The specified key does not exist.")
+                                    {
+                                        throw;
+                                    }
+                                    // else just ignore this--someone deleted a source file before we were able to get to it to copy it
                                 }
-                                Program.State.AddChargeForCopies(1);
-                                string paddedBatchId = batch.BatchId.ToString().PadLeft(6, ' ');
-                                using (Program.TrackOperation("COPY " + paddedBatchId + "." + objectNumber.ToString("000") + ": " + key + " (" + (sourceObject.Size + 500000) / 1000000 + "MB)"))
+                                finally
                                 {
-                                    await _s3.CopyObjectAsync(request, cancel);
+                                    Interlocked.Decrement(ref _copiesInProgress);
                                 }
-                                string operation = String.Format("{0}.{1} {2} ({3:F0}MB:{4})", batch.BatchId, objectNumber, (targetObject == null) ? "copied" : "updated", sourceObject.Size / 1000000.0, key);
-                                if (targetObject != null) operation += " " + sourceObject.ETag + " vs " + targetObject.ETag;
-                                Program.LogVerbose(operation);
-                                // track what the operation we just completed successfully
-                                Program.State.TrackObject(sourceObject, targetObject == null, targetObject != null);
-                            }
-                            catch (AmazonS3Exception ex)
-                            {
-                                Program.LogVerbose("Error attempting copy of " + sourceObject.BucketName + "/" + sourceObject.Key  + " to " + _bucket + "/" + _prefix + key + ex.ToString());
-                                if (ex.Message != "The specified key does not exist.")
-                                {
-                                    throw;
-                                }
-                                // else just ignore this--someone deleted a source file before we were able to get to it to copy it
-                            }
-                            finally
-                            {
-                                Interlocked.Decrement(ref _copiesInProgress);
                             }
                         });
                 }
