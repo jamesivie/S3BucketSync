@@ -861,7 +861,7 @@ Logging and Saved State:
         /// <returns>A <see cref="IDisposable"/> object that will keep the description string in the list of operations in progress until it is disposed.</returns>
         public static IDisposable TrackOperation(string description, Func<string> dynamicDescription = null)
         {
-            return new OperationTracker(description);
+            return new OperationTracker(description, dynamicDescription);
         }
 
         class OperationTracker : IDisposable
