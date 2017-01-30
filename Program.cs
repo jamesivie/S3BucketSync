@@ -16,7 +16,7 @@ Permission is hereby granted, free of charge, to any person obtaining a copy of 
 
 The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 
-This code may not be incorporated into any source or binary code distributed by Amazon or its subsidiareis, subcontractors, parent companies, etc. without a separate license.
+This code may not be incorporated into any source or binary code distributed by Amazon or its subsidiaries, subcontractors, parent companies, etc. without a separate license.
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 */
@@ -451,7 +451,7 @@ Logging and Saved State:
                 {
                     // is this a non-recoverable error?  kill us!
                     AmazonS3Exception awsS3Exception = e as AmazonS3Exception;
-                    if (awsS3Exception.ErrorCode == "AccessDenied")
+                    if (awsS3Exception != null && awsS3Exception.ErrorCode == "AccessDenied")
                     {
                         System.Threading.Interlocked.Exchange(ref _AsyncException, awsS3Exception);
                         // this should trigger a fatal exception on the main thread
@@ -540,7 +540,7 @@ Logging and Saved State:
                                     {
                                         try
                                         {
-                                            string retryString = ((retry > 0) ? "" : (" retry " + retry.ToString()));
+                                            string retryString = ((retry > 0) ? "" : ((retry == 0) ? "first try" : (" retry " + retry.ToString())));
                                             // get the last (greatest) key in the batch
                                             string lastKey = batch.GreatestKey;
                                             using (TrackOperation("BATCH " + paddedBatchId + ": Waiting for target window to include " + lastKey + retryString))
