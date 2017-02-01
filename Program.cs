@@ -402,7 +402,7 @@ Logging and Saved State:
                     state += " CP:" + _TargetBucketObjectsWindow.CopiesInProgress.ToString();
                     if (seconds > 1.0)
                     {
-                        state += " O/s:" + State.MagnitudeConvert((objectsProcessed - lastObjectsProcessed) / seconds, 2);
+                        state += " OP/s:" + State.MagnitudeConvert((objectsProcessed - lastObjectsProcessed) / seconds, 2);
                         state += " B/s:" + State.MagnitudeConvert((bytesProcessed - lastBytesProcessed) / seconds, 2) + "/" + State.MagnitudeConvert((bytesCopiedOrUpdated - lastBytesCopiedOrUpdated) / seconds, 2);
                     }
                     Console.WriteLine(state);
