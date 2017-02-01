@@ -82,6 +82,23 @@ namespace S3BucketSync
         /// </summary>
         public long ObjectsUpdated { get { return _objectsUpdated; } }
 
+        private static string AdjustAndAddSuffix(double value, double adjustFactor, string suffix, int lengthLimit = 4)
+        {
+            string s = ((value + (adjustFactor / 2000)) / adjustFactor).ToString();
+            s = s.Substring(0, Math.Min(s.Length, lengthLimit)).TrimEnd('.', '0');
+            return (string.IsNullOrEmpty(s) ? "0" : s) + suffix;
+        }
+        public static string MagnitudeConvert(double value, int digits = 3)
+        {
+            if (value < 1000) return AdjustAndAddSuffix(value, 1, "", digits + 1);
+            if (value < 1000000) return AdjustAndAddSuffix(value, 1000, "K", digits + 1);
+            if (value < 1000000000) return AdjustAndAddSuffix(value, 1000000, "M", digits + 1);
+            if (value < 1000000000000) return AdjustAndAddSuffix(value, 1000000000, "G", digits + 1);
+            if (value < 1000000000000000) return AdjustAndAddSuffix(value, 1000000000000, "T", digits + 1);
+            if (value < 1000000000000000000) return AdjustAndAddSuffix(value, 1000000000000000, "P", digits + 1);
+            if (value < 1000000000000000000000.0) return AdjustAndAddSuffix(value, 1000000000000000000, "E", digits + 1);
+            return value.ToString("E3");
+        }
         /// <summary>
         /// Constructs a state object for the sync operation from the specified source to the specified destination.
         /// </summary>
@@ -105,16 +122,16 @@ namespace S3BucketSync
         public override string ToString()
         {
             string output = String.Format(
-                "${0:F2} QUERY:{1},{2} OBJ:{3}c/{4}u/{5}t MB:{6:F1}c/{7:F1}u/{8:F1}t",
+                "${0:F2} QUERY:{1},{2} O:{3}c/{4}u/{5}t B:{6}c/{7}u/{8}t",
                 DollarCostSoFar,
-                _sourceQueries,
-                _targetQueries,
-                _objectsCopied,
-                _objectsUpdated,
-                _objectsProcessed,
-                _bytesCopied / 1000000.0,
-                _bytesUpdated / 1000000.0,
-                _bytesProcessed / 1000000.0
+                MagnitudeConvert(_sourceQueries, 1),
+                MagnitudeConvert(_targetQueries, 1),
+                MagnitudeConvert(_objectsCopied, 1),
+                MagnitudeConvert(_objectsUpdated, 1),
+                MagnitudeConvert(_objectsProcessed, 1),
+                MagnitudeConvert(_bytesCopied),
+                MagnitudeConvert(_bytesUpdated),
+                MagnitudeConvert(_bytesProcessed)
                 );
             return output;
         }

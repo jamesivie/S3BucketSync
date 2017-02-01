@@ -375,16 +375,6 @@ Logging and Saved State:
                 default: return null;
             }
         }
-        private static string MagnitudeConvert(long value)
-        {
-            if (value < 1000) return value.ToString() + " ";
-            if (value < 1000000) return ((value + 500) / 1000).ToString() + "K";
-            if (value < 1000000000) return ((value + 500000) / 1000000).ToString() + "M";
-            if (value < 1000000000000) return ((value + 500000000) / 1000000000).ToString() + "G";
-            if (value < 1000000000000000) return ((value + 500000000000) / 1000000000000).ToString() + "T";
-            if (value < 1000000000000000000) return ((value + 500000000000000) / 1000000000000000).ToString() + "P";
-            return ((value + 500000000000000000) / 1000000000000000000).ToString() + "E";
-        }
         /// <summary>
         /// A static function that loops expanding the target window as needed.
         /// </summary>
@@ -399,6 +389,7 @@ Logging and Saved State:
                 try
                 {
                     DateTime loopTime = DateTime.UtcNow;
+                    double seconds = (loopTime - lastLoopTime).TotalSeconds;
                     long objectsProcessed = Program.State.ObjectsProcessed;
                     long bytesProcessed = Program.State.BytesProcessed;
                     long bytesCopiedOrUpdated = Program.State.BytesCopied + Program.State.BytesUpdated;
@@ -409,9 +400,11 @@ Logging and Saved State:
                     state += " BQ:" + _SourceBucketObjectsWindow.BatchesQueued.ToString();
                     state += " BP:" + _batchesProcessing.ToString();
                     state += " CP:" + _TargetBucketObjectsWindow.CopiesInProgress.ToString();
-                    state += " OR:" + (objectsProcessed - lastObjectsProcessed).ToString() + "/s";
-                    state += " PR:" + MagnitudeConvert(bytesProcessed - lastBytesProcessed) + "B/s";
-                    state += " CR:" + MagnitudeConvert(bytesCopiedOrUpdated - lastBytesCopiedOrUpdated) + "B/s";
+                    if (seconds > 1.0)
+                    {
+                        state += " O/s:" + State.MagnitudeConvert((objectsProcessed - lastObjectsProcessed) / seconds, 2);
+                        state += " B/s:" + State.MagnitudeConvert((bytesProcessed - lastBytesProcessed) / seconds, 2) + "/" + State.MagnitudeConvert((bytesCopiedOrUpdated - lastBytesCopiedOrUpdated) / seconds, 2);
+                    }
                     Console.WriteLine(state);
 
                     lastLoopTime = loopTime;
