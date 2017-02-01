@@ -187,6 +187,25 @@ namespace S3BucketSync
             return batch == null ? 0 : batch.Response.S3Objects.Count;
         }
 
+        private ListObjectsV2Response ListObjectsWithRetry(ListObjectsV2Request request)
+        {
+            Exception caught = null;
+            for (int attempt = 0; attempt < 3; ++attempt)
+            {
+                try
+                {
+                    return _s3.ListObjectsV2(request);
+                }
+                catch (Amazon.Runtime.AmazonUnmarshallingException ex)
+                {
+                    caught = ex;
+                    // likely an out of memory error--do a GC to see if we can work around this issue--it appears to need to allocate HUGE strings
+                    GC.Collect(2, GCCollectionMode.Forced, true);
+                }
+            }
+            throw new ApplicationException("Unable to query bucket!", caught);
+        }
+
         private Batch GetNextBatch()
         {
             // already queued the last batch? return an indicator that we're at the end!
@@ -197,10 +216,10 @@ namespace S3BucketSync
             string operation = "QUERY: Get batch " + batchId + " from " + _bucket + "/" + _prefix;
             Interlocked.Exchange(ref _lastQuery, operation);
             Stopwatch timer = Stopwatch.StartNew();
-            ListObjectsV2Response response;
+            ListObjectsV2Response response = null;
             using (Program.TrackOperation(operation))
             {
-                response = _s3.ListObjectsV2(request);
+                response = ListObjectsWithRetry(request);
             }
             if (!response.IsTruncated)
             {
