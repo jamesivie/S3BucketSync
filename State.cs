@@ -58,6 +58,31 @@ namespace S3BucketSync
         private BatchIdCounter _sourceBatchId;
 
         /// <summary>
+        /// Gets the number of bytes processed so far.
+        /// </summary>
+        public long BytesProcessed { get { return _bytesProcessed; } }
+        /// <summary>
+        /// Gets the number of bytes copied so far.
+        /// </summary>
+        public long BytesCopied { get { return _bytesCopied; } }
+        /// <summary>
+        /// Gets the number of bytes updated so far.
+        /// </summary>
+        public long BytesUpdated { get { return _bytesUpdated; } }
+        /// <summary>
+        /// Gets the number of objects processed so far.
+        /// </summary>
+        public long ObjectsProcessed { get { return _objectsProcessed; } }
+        /// <summary>
+        /// Gets the number of objects copied so far.
+        /// </summary>
+        public long ObjectsCopied { get { return _objectsCopied; } }
+        /// <summary>
+        /// Gets the number of objects updated so far.
+        /// </summary>
+        public long ObjectsUpdated { get { return _objectsUpdated; } }
+
+        /// <summary>
         /// Constructs a state object for the sync operation from the specified source to the specified destination.
         /// </summary>
         /// <param name="sourceRegionBucketAndPrefix">The source region, bucket, and prefix.</param>

@@ -217,7 +217,7 @@ Logging and Saved State:
                     {
                         _GrantCannedAcl = cannedAcl;
                     }
-                    else
+                    else if (!string.IsNullOrEmpty(grantString))
                     {
                         _Grant = CreateS3Grant(grantString);
                     }
@@ -375,15 +375,33 @@ Logging and Saved State:
                 default: return null;
             }
         }
+        private static string MagnitudeConvert(long value)
+        {
+            if (value < 1000) return value.ToString() + " ";
+            if (value < 1000000) return ((value + 500) / 1000).ToString() + "K";
+            if (value < 1000000000) return ((value + 500000) / 1000000).ToString() + "M";
+            if (value < 1000000000000) return ((value + 500000000) / 1000000000).ToString() + "G";
+            if (value < 1000000000000000) return ((value + 500000000000) / 1000000000000).ToString() + "T";
+            if (value < 1000000000000000000) return ((value + 500000000000000) / 1000000000000000).ToString() + "P";
+            return ((value + 500000000000000000) / 1000000000000000000).ToString() + "E";
+        }
         /// <summary>
         /// A static function that loops expanding the target window as needed.
         /// </summary>
         static void StatusDumper()
         {
+            DateTime lastLoopTime = DateTime.UtcNow;
+            long lastObjectsProcessed = Program.State.ObjectsProcessed;
+            long lastBytesProcessed = Program.State.BytesProcessed;
+            long lastBytesCopiedOrUpdated = Program.State.BytesCopied + Program.State.BytesUpdated;
             while (true)
             {
                 try
                 {
+                    DateTime loopTime = DateTime.UtcNow;
+                    long objectsProcessed = Program.State.ObjectsProcessed;
+                    long bytesProcessed = Program.State.BytesProcessed;
+                    long bytesCopiedOrUpdated = Program.State.BytesCopied + Program.State.BytesUpdated;
                     // wait for a bit
                     Thread.Sleep(5000);
                     // write out the status
@@ -391,7 +409,15 @@ Logging and Saved State:
                     state += " BQ:" + _SourceBucketObjectsWindow.BatchesQueued.ToString();
                     state += " BP:" + _batchesProcessing.ToString();
                     state += " CP:" + _TargetBucketObjectsWindow.CopiesInProgress.ToString();
+                    state += " OR:" + (objectsProcessed - lastObjectsProcessed).ToString() + "/s";
+                    state += " PR:" + MagnitudeConvert(bytesProcessed - lastBytesProcessed) + "B/s";
+                    state += " CR:" + MagnitudeConvert(bytesCopiedOrUpdated - lastBytesCopiedOrUpdated) + "B/s";
                     Console.WriteLine(state);
+
+                    lastLoopTime = loopTime;
+                    lastObjectsProcessed = objectsProcessed;
+                    lastBytesProcessed = bytesProcessed;
+                    lastBytesCopiedOrUpdated = bytesCopiedOrUpdated;
                 }
                 catch (Exception e)
                 {
