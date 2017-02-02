@@ -403,7 +403,8 @@ Logging and Saved State:
                     if (seconds > 1.0)
                     {
                         state += " OP/s:" + State.MagnitudeConvert((objectsProcessed - lastObjectsProcessed) / seconds, 2);
-                        state += " B/s:" + State.MagnitudeConvert((bytesProcessed - lastBytesProcessed) / seconds, 2) + "/" + State.MagnitudeConvert((bytesCopiedOrUpdated - lastBytesCopiedOrUpdated) / seconds, 2);
+                        state += " BP/s:" + State.MagnitudeConvert((bytesProcessed - lastBytesProcessed) / seconds, 2);
+                        state += " BC/s:" + State.MagnitudeConvert((bytesCopiedOrUpdated - lastBytesCopiedOrUpdated) / seconds, 2);
                     }
                     Console.WriteLine(state);
 
