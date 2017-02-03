@@ -55,6 +55,10 @@ namespace S3BucketSync
         private string _sourceContinuationToken;
         private int _lastCompletedBatchId;
         private string _lastKeyOfLastBatchCompleted;
+        private string _lastCopyCompleted;
+        private long _lastCopyDate;
+        private string _lastUpdateCompleted;
+        private long _lastUpdateDate;
         private BatchIdCounter _sourceBatchId;
 
         /// <summary>
@@ -81,6 +85,22 @@ namespace S3BucketSync
         /// Gets the number of objects updated so far.
         /// </summary>
         public long ObjectsUpdated { get { return _objectsUpdated; } }
+        /// <summary>
+        /// Gets the key for the last copy that was completed.
+        /// </summary>
+        public string LastCopyCompleted { get { return _lastCopyCompleted; } }
+        /// <summary>
+        /// Gets the key for the last update that was completed.
+        /// </summary>
+        public string LastUpdateCompleted { get { return _lastUpdateCompleted; } }
+        /// <summary>
+        /// Gets the modified date for the last copy that was completed.
+        /// </summary>
+        public DateTime LastCopyCompletedModifiedDate { get { return new DateTime(_lastCopyDate); } }
+        /// <summary>
+        /// Gets the modified date for the last update that was completed.
+        /// </summary>
+        public DateTime LastUpdateCompletedModifiedDate { get { return new DateTime(_lastUpdateDate); } }
 
         private static string AdjustAndAddSuffix(double value, double adjustFactor, string suffix, int lengthLimit = 4)
         {
@@ -240,6 +260,16 @@ namespace S3BucketSync
         /// <param name="updated">Whether or not the item needed to be udpated.</param>
         public void TrackObject(S3Object o, bool copied, bool updated)
         {
+            if (copied)
+            {
+                Interlocked.Exchange(ref _lastCopyCompleted, o.Key);
+                Interlocked.Exchange(ref _lastCopyDate, o.LastModified.Ticks);
+            }
+            if (updated)
+            {
+                Interlocked.Exchange(ref _lastUpdateCompleted, o.Key);
+                Interlocked.Exchange(ref _lastUpdateDate, o.LastModified.Ticks);
+            }
             InterlockedMin(ref _earliestDate, o.LastModified.Ticks);
             InterlockedMax(ref _latestDate, o.LastModified.Ticks);
             Interlocked.Add(ref _bytesProcessed, o.Size);

@@ -397,9 +397,9 @@ Logging and Saved State:
                     Thread.Sleep(5000);
                     // write out the status
                     string state = Program.State.ToString();
-                    state += " BQ:" + _SourceBucketObjectsWindow.BatchesQueued.ToString();
-                    state += " BP:" + _batchesProcessing.ToString();
-                    state += " CP:" + _TargetBucketObjectsWindow.CopiesInProgress.ToString();
+                    state += " Q:" + _SourceBucketObjectsWindow.BatchesQueued.ToString();
+                    state += " P:" + _batchesProcessing.ToString();
+                    state += " C:" + _TargetBucketObjectsWindow.CopiesInProgress.ToString();
                     if (seconds > 1.0)
                     {
                         state += " OP/s:" + State.MagnitudeConvert((objectsProcessed - lastObjectsProcessed) / seconds, 2);
@@ -560,7 +560,7 @@ Logging and Saved State:
                                     {
                                         try
                                         {
-                                            string retryString = ((retry > 0) ? "" : ((retry == 0) ? "first try" : (" retry " + retry.ToString())));
+                                            string retryString = ((retry > 0) ? "" : ((retry == 0) ? " first try" : (" retry " + retry.ToString())));
                                             // get the last (greatest) key in the batch
                                             string lastKey = batch.GreatestKey;
                                             using (TrackOperation("BATCH " + paddedBatchId + ": Waiting for target window to include " + lastKey + retryString))
@@ -837,6 +837,16 @@ Logging and Saved State:
             operations.AppendLine("Batches Complete: " + _TargetBucketObjectsWindow.MostRecentlyDequeuedBatchId);
             operations.AppendLine("Objects Processed: " + _ObjectsProcessedThisRun + "/" + _SourceObjectsReadThisRun);
             operations.AppendLine("Objects Compared: " + _TargetObjectsReadThisRun);
+            if (!string.IsNullOrEmpty(_State.LastCopyCompleted))
+            {
+                operations.AppendLine("Last Object Copied: " + _State.LastCopyCompleted);
+                operations.AppendLine("Modified Date of Last Object Copied: " + _State.LastCopyCompletedModifiedDate.ToString());
+            }
+            if (!string.IsNullOrEmpty(_State.LastUpdateCompleted))
+            {
+                operations.AppendLine("Last Object Updated: " + _State.LastUpdateCompleted);
+                operations.AppendLine("Modified Date of Last Object Updated: " + _State.LastUpdateCompletedModifiedDate.ToString());
+            }
 
             if (level > 1)
             {
