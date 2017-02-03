@@ -581,7 +581,7 @@ Logging and Saved State:
                                                 for (int n = 0; n < count; ++n)
                                                 {
                                                     // has this object been created or modified in the past 15 minutes? skip this one, as AWS may be in the process of replicating it
-                                                    if (objects[n].LastModified > modificationCutoffTime)
+                                                    if (objects[n].LastModified.ToUniversalTime() > modificationCutoffTime)
                                                     {
                                                         Interlocked.Increment(ref _ObjectsProcessedThisRun);
                                                         continue;
