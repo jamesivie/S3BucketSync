@@ -68,7 +68,7 @@ namespace S3BucketSync
         static public int TimeoutSeconds { get { return _TimeoutSeconds; } }
 
 
-        static void Main(string[] args)
+        static int Main(string[] args)
         {
             try
             {
@@ -122,7 +122,7 @@ Logging and Saved State:
     Everything output to the console is also logged into a file named log.<region>_<bucket>_<source_prefix>.txt
     State is saved as batches are completed in a file named state.<region>_<bucket>_<source_prefix>.bin
 ");
-                    return;
+                    return 1;
                 }
                 // process args
                 for (int narg = 0; narg < args.Length; ++narg)
@@ -255,11 +255,11 @@ Logging and Saved State:
                         while (!_SourceBucketObjectsWindow.LastBatchHasBeenRead)
                         {
                             if (_AsyncException != null) throw _AsyncException;
-                            if (ExitKeyPressed()) return;
+                            if (ExitKeyPressed()) return 2;
                             // loop until we have the desired number of batches in the window or we hit the end
                             while (_SourceBucketObjectsWindow.BatchesQueued < batchesToQueue && !_SourceBucketObjectsWindow.LastBatchHasBeenRead)
                             {
-                                if (ExitKeyPressed()) return;
+                                if (ExitKeyPressed()) return 2;
                                 // read the next batch
                                 _State.RecordQueries(true);
                                 using (TrackOperation("MAIN: Reading batch " + (_SourceBucketObjectsWindow.LastQueuedBatchId + 1).ToString()))
@@ -296,7 +296,7 @@ Logging and Saved State:
                         Program.Exception("Error reading source bucket: ", ex);
                         _Log.Flush();
                         _Error.Flush();
-                        return;
+                        return - 2;
                     }
                     using (TrackOperation("MAIN: Queueing complete: Waiting for processing"))
                     {
@@ -308,7 +308,7 @@ Logging and Saved State:
                             {
                                 // log the end state
                                 Program.Log(_State.ToString());
-                                return;
+                                return 2;
                             }
                         }
                     }
@@ -321,6 +321,7 @@ Logging and Saved State:
                     _Log.Flush();
                     _Error.Flush();
                 }
+                return 0;
             }
             catch (Exception ex)
             {
@@ -328,6 +329,7 @@ Logging and Saved State:
                 Debugger.Break();
 #endif
                 Program.Error("FATAL PROGRAM ERROR: " + ex.ToString());
+                return -1;
             }
         }
         private static string AddCommonPrefix(string bucketAndPrefix, string cp)
