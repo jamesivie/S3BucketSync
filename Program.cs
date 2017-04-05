@@ -629,6 +629,18 @@ Logging and Saved State:
                                                 break;
                                             }
                                         }
+                                        catch (System.OperationCanceledException ex)
+                                        {
+                                            // normal retry timeout?
+                                            if (ex.Message.StartsWith("The request was aborted: The request was canceled.") && retry <= _RetryCount)
+                                            {
+                                                // clear the task list so we can try again
+                                                tasks.Clear();
+                                                continue;
+                                            }
+                                            Program.Error("Batch " + batch.BatchId + " has failed " + retry.ToString() + " times.  The process will need to be rerun after the problem is corrected: " + ex.ToString());
+                                            throw;
+                                        }
                                         catch (Exception ex)
                                         {
                                             // retry this batch up to the configured number of times in addition to the initial run before reporting an error
@@ -639,11 +651,8 @@ Logging and Saved State:
                                                 tasks.Clear();
                                                 continue;
                                             }
-                                            else
-                                            {
-                                                Program.Error("Batch " + batch.BatchId + " has failed " + retry.ToString() + " times.  The process will need to be rerun after the problem is corrected: " + ex.ToString());
-                                                throw;
-                                            }
+                                            Program.Error("Batch " + batch.BatchId + " has failed " + retry.ToString() + " times.  The process will need to be rerun after the problem is corrected: " + ex.ToString());
+                                            throw;
                                         }
                                         finally
                                         {
