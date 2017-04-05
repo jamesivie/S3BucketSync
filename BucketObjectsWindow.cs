@@ -255,6 +255,7 @@ namespace S3BucketSync
         /// <returns>A <see cref="Task"/> for the copy/update operation (if one was needed).</returns>
         internal Task UpdateObjectIfNeeded(Batch batch, int objectNumber, string key, CancellationToken cancel = default(CancellationToken))
         {
+            cancel.ThrowIfCancellationRequested();
             S3Object sourceObject = batch.Response.S3Objects[objectNumber];
             // the item should be within the current bounds of the window
             System.Diagnostics.Debug.Assert(String.CompareOrdinal(key, _unprefixedLeastKey) >= 0);
@@ -274,6 +275,7 @@ namespace S3BucketSync
                     // return a task for the copy operation
                     return Task.Run(async () =>
                         {
+                            cancel.ThrowIfCancellationRequested();
                             string paddedBatchId = batch.BatchId.ToString().PadLeft(6, ' ');
                             for (int taskStarvationSilentRetry = 0; taskStarvationSilentRetry < 5; ++taskStarvationSilentRetry)
                             {
@@ -329,7 +331,7 @@ namespace S3BucketSync
                                     Interlocked.Decrement(ref _copiesInProgress);
                                 }
                             }
-                        });
+                        }, cancel);
                 }
             }
             // else already synchronized

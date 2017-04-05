@@ -562,6 +562,7 @@ Logging and Saved State:
                                     {
                                         try
                                         {
+                                            CancellationTokenSource batchAttemptCancellationToken = new CancellationTokenSource(Program.TimeoutSeconds * 1000);
                                             string retryString = ((retry > 0) ? "" : ((retry == 0) ? " first try" : (" retry " + retry.ToString())));
                                             // get the last (greatest) key in the batch
                                             string lastKey = batch.GreatestKey;
@@ -589,7 +590,7 @@ Logging and Saved State:
                                                         continue;
                                                     }
                                                     string unprefixedKey = objects[n].Key.Substring(sourcePrefix.Length);
-                                                    Task copyOperation = _TargetBucketObjectsWindow.UpdateObjectIfNeeded(batch, n, unprefixedKey);
+                                                    Task copyOperation = _TargetBucketObjectsWindow.UpdateObjectIfNeeded(batch, n, unprefixedKey, batchAttemptCancellationToken.Token);
                                                     // if there was async processing necessary, add it to the list of tasks
                                                     if (copyOperation != null)
                                                     {
