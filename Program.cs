@@ -631,8 +631,9 @@ Logging and Saved State:
                                         }
                                         catch (System.OperationCanceledException ex)
                                         {
+                                            if (_Abort != 0) return;
                                             // normal retry timeout?
-                                            if (ex.Message.StartsWith("The request was aborted: The request was canceled.") && retry <= _RetryCount)
+                                            if (retry <= _RetryCount)
                                             {
                                                 // clear the task list so we can try again
                                                 tasks.Clear();
@@ -643,6 +644,7 @@ Logging and Saved State:
                                         }
                                         catch (Exception ex)
                                         {
+                                            if (_Abort != 0) return;
                                             // retry this batch up to the configured number of times in addition to the initial run before reporting an error
                                             if (retry <= _RetryCount)
                                             {
