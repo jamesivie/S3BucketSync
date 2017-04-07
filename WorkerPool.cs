@@ -266,7 +266,7 @@ namespace S3BucketSync
         private const int RetireCheckAfterCreationMilliseconds = 60 * 1000;
         private const int RetireCheckMilliseconds = 3 * 1000;
         private const int MaxThreadsPerLogicalCpu = 50;
-        private readonly bool executeDisposalCheck = false;
+        private readonly bool _executeDisposalCheck = false;
 #else
         private readonly static int PoolChunkSize = LogicalCpuCount;
         private const int RetireCheckAfterCreationMilliseconds = 5 * 60 * 1000;
@@ -311,6 +311,18 @@ namespace S3BucketSync
         /// </summary>
         public static WorkerPool Default { get { return _DefaultWorkerPool; } }
 
+        /// <summary>
+        /// Gets the total number of workers.
+        /// </summary>
+        public int Workers { get { return _workers; } }
+        /// <summary>
+        /// Gets the number of workers that were used concurrently in the last little while.
+        /// </summary>
+        public int PeakConcurrentWorkersUsedRecently { get { return _peakConcurrentUsageSinceLastRetirementCheck; } }
+        /// <summary>
+        /// Gets the number of workers that are ready to do some work.
+        /// </summary>
+        public int ReadyWorkers { get { return _readyWorkerList.Count; } }
         /// <summary>
         /// Gets the number of currently busy workers.
         /// </summary>
@@ -373,7 +385,7 @@ namespace S3BucketSync
             : this(poolName, priority)
         {
 #if DEBUG
-            this.executeDisposalCheck = executeDisposalCheck;
+            this._executeDisposalCheck = executeDisposalCheck;
 #endif
         }
 
@@ -429,7 +441,7 @@ namespace S3BucketSync
         private string fStackAtConstruction = new StackTrace().ToString();
         ~WorkerPool()
         {
-            if (executeDisposalCheck)
+            if (_executeDisposalCheck)
             {
                 Debug.Fail(String.Format(System.Globalization.CultureInfo.InvariantCulture, "Failed to dispose/close WorkerPool " + _poolName + ": Stack at construction was:\n{0}", fStackAtConstruction));
             }
@@ -670,8 +682,11 @@ namespace S3BucketSync
                 // too many busy workers already?
                 if (_busyWorkers > MaxWorkerThreads)
                 {
-                    // just wait for things to change--we're overloaded and we're not going to make things better by starting up more threads!
-                    System.Threading.Thread.Sleep(100);
+                    using (Program.TrackOperation("WAIT: pool overloaded: " + _poolName))
+                    {
+                        // just wait for things to change--we're overloaded and we're not going to make things better by starting up more threads!
+                        System.Threading.Thread.Sleep(100);
+                    }
                     goto Retry;
                 }
                 // create a new one right now--it will be added to the ready worker list when we're done
@@ -700,6 +715,7 @@ namespace S3BucketSync
                 });
             return !synchronous;
         }
+
         /// <summary>
         /// Runs an action asynchronously.  No assumption is made about the identity under which the action is run.
         /// </summary>
