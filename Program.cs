@@ -86,7 +86,7 @@ Options:
     common_prefix is an optional prefix string that is appended to both the source_prefix and target_prefix just to save typing the same prefixes for two different buckets
     -b means restart at the beginning, ignore any saved state
     -v means output extra messages to see more details of what's going on
-    -g grants the account represented by the email full rights
+    -g grants the account represented by the email full rights, or grant according the the specified canned ACL
     -t is the copy timeout in seconds (the default is 10 minutes)
     -r is the batch retry count (the default is 4)
     -q is the maximum number of batches to queue (default is 250)
