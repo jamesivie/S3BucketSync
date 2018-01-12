@@ -30,6 +30,7 @@ namespace S3BucketSync
         private readonly string _sourceRegionBucketAndPrefix;
         private readonly string _targetRegionBucketAndPrefix;
         private readonly string _grant;
+        private readonly string _encryptionMethod;
         private readonly DateTime _startDate;
         // everything after this is interlocked
         private long _unrecordedTimeStartTicks;
@@ -125,11 +126,13 @@ namespace S3BucketSync
         /// <param name="sourceRegionBucketAndPrefix">The source region, bucket, and prefix.</param>
         /// <param name="targetRegionBucketAndPrefix">The target region, bucket, and prefix.</param>
         /// <param name="grant">A string indicating rights being granted to the target file.</param>
-        public State(string sourceRegionBucketAndPrefix, string targetRegionBucketAndPrefix, string grant)
+        /// <param name="encryptionMethod">A string indicating the encryption method to use for the target file.</param>
+        public State(string sourceRegionBucketAndPrefix, string targetRegionBucketAndPrefix, string grant, string encryptionMethod)
         {
             _sourceRegionBucketAndPrefix = sourceRegionBucketAndPrefix;
             _targetRegionBucketAndPrefix = targetRegionBucketAndPrefix;
             _grant = grant;
+            _encryptionMethod = encryptionMethod;
             _startDate = DateTime.UtcNow;
             _unrecordedTimeStartTicks = _startDate.Ticks;
             _ticksUsed = 0;
@@ -182,6 +185,7 @@ namespace S3BucketSync
             str.AppendFormat("Latest Copied Object Date: {0}{1}", new DateTime(_latestCopiedDate), Environment.NewLine);
             str.AppendFormat("Latest Updated Object Date: {0}{1}", new DateTime(_latestUpdatedDate), Environment.NewLine);
             if (_grant != null) str.AppendFormat("Grant: {0}{1}", _grant, Environment.NewLine);
+            if (_encryptionMethod != null) str.AppendFormat("Encryption: {0}{1}", _encryptionMethod, Environment.NewLine);
             str.AppendLine();
             return str.ToString();
         }
@@ -195,6 +199,13 @@ namespace S3BucketSync
         public string GrantString
         {
             get { return _grant; }
+        }
+        /// <summary>
+        /// The target encryption method, "None" or "AES256".
+        /// </summary>
+        public string EncryptionMethod
+        {
+            get { return _encryptionMethod; }
         }
         /// <summary>
         /// Gets the source continuation token, which tracks the next batch of source items needing to be processed.

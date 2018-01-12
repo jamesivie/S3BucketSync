@@ -4,7 +4,9 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
 using System.Linq;
+using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -30,6 +32,7 @@ namespace S3BucketSync
         private readonly string _prefix;
         private readonly S3Grant _grant;
         private readonly S3CannedACL _grantCannedAcl;
+        private readonly ServerSideEncryptionMethod _targetEncryptionMethod;
         /// <summary>
         /// A monitor to serialize removing batches from the queue.
         /// </summary>
@@ -59,7 +62,7 @@ namespace S3BucketSync
         /// <param name="unprefixedStartAtKey">The key to start at or <b>null</b> to start at the beginning.</param>
         /// <param name="cannedAcl">A <see cref="S3CannedACL"/> to use for the target file.</param>
         /// <param name="grant">A <see cref="S3Grant"/> indicating rights grants to apply to the target file.</param>
-        public BucketObjectsWindow(string regionBucketAndPrefix, BatchIdCounter batchIdCounter, string unprefixedStartAtKey = null, S3CannedACL cannedAcl = null, S3Grant grant = null)
+        public BucketObjectsWindow(string regionBucketAndPrefix, BatchIdCounter batchIdCounter, string unprefixedStartAtKey = null, S3CannedACL cannedAcl = null, S3Grant grant = null, ServerSideEncryptionMethod targetEncryptionMethod = null)
         {
             _batchIdCounter = batchIdCounter;
             Tuple<string, string, string> parsedRegionBucketAndPrefix = ParseRegionBucketAndPrefix(regionBucketAndPrefix);
@@ -80,6 +83,7 @@ namespace S3BucketSync
                 _unprefixedLeastKey = string.Empty;
             }
             _unprefixedGreatestKey = string.Empty;
+            _targetEncryptionMethod = targetEncryptionMethod;
         }
 
         /// <summary>
@@ -110,6 +114,17 @@ namespace S3BucketSync
             int colonOffset = regionAndBucket.IndexOf(':');
             if (colonOffset < 0) return new Tuple<string, string>(regionAndBucket, string.Empty);
             return new Tuple<string, string>(regionAndBucket.Substring(0, colonOffset), regionAndBucket.Substring(colonOffset + 1));
+        }
+
+        public static byte[] ComputeMD5Hash(Stream stream)
+        {
+            using (MD5 hash = MD5.Create())
+            {
+                stream.Position = 0;
+                byte[] data = hash.ComputeHash(stream);
+                stream.Position = 0;
+                return data;
+            }
         }
 
         /// <summary>
@@ -300,6 +315,10 @@ namespace S3BucketSync
                                 else if (_grant != null)
                                 {
                                     request.Grants.Add(_grant);
+                                }
+                                if (_targetEncryptionMethod != null)
+                                {
+                                    request.ServerSideEncryptionMethod = _targetEncryptionMethod;
                                 }
                                 // return the CopyObjectRequest for the copy operation
                                 return request;

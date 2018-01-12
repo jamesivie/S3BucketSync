@@ -41,6 +41,7 @@ namespace S3BucketSync
         static private bool _Verbose;
         static private S3CannedACL _GrantCannedAcl;
         static private S3Grant _Grant;
+        static private ServerSideEncryptionMethod _TargetEncryptionMethod;
         static private Exception _AsyncException;
         static private int _SourceObjectsReadThisRun;   // interlocked
         static private int _TargetObjectsReadThisRun;   // interlocked
@@ -71,6 +72,7 @@ namespace S3BucketSync
                 string targetRegionBucketAndPrefix = null;
                 string commonPrefix = null;
                 string grantString = null;
+                string encryptionMethodString = null;
                 bool reset = false;
                 // no arguments or not enough arguments?
                 if (args.Length < 2)
@@ -139,6 +141,13 @@ Logging and Saved State:
                             grantString = arg;
                             ++narg;
                         }
+                        else if (argument.ToLowerInvariant().StartsWith("-e"))
+                        {
+                            if (narg + 1 >= args.Length) throw new ArgumentException("-e must be followed by the encruption method for the target (probably \"AES256\") !");
+                            string arg = args[narg + 1];
+                            encryptionMethodString = arg;
+                            ++narg;
+                        }
                         else if (argument.ToLowerInvariant().StartsWith("-t"))
                         {
                             if (narg + 1 >= args.Length) throw new ArgumentException("-t must be followed by the number of seconds to wait for a copy before timing out!");
@@ -203,7 +212,7 @@ Logging and Saved State:
                     if (_State == null)
                     {
                         // use a default state
-                        _State = new State(sourceRegionBucketAndPrefix, targetRegionBucketAndPrefix, grantString);
+                        _State = new State(sourceRegionBucketAndPrefix, targetRegionBucketAndPrefix, grantString, encryptionMethodString);
                     }
                     S3CannedACL cannedAcl = CreateS3CannedACL(_State.GrantString);
                     // A supported canned ACL?
@@ -216,11 +225,14 @@ Logging and Saved State:
                         _Grant = CreateS3Grant(grantString);
                     }
                     string grantDisplayString = (_Grant != null) ? (" with grant to " + _Grant.Grantee.EmailAddress) : ((_GrantCannedAcl != null) ? (" with canned ACL " + _GrantCannedAcl.Value) : string.Empty);
+                    // target encryption?
+                    _TargetEncryptionMethod = CreateTargetEncryptionMethod(_State.EncryptionMethod);
+
                     Program.Log(Environment.NewLine + "Start Sync from " + sourceRegionBucketAndPrefix + " to " + targetRegionBucketAndPrefix + grantDisplayString);
                     // initialize the source bucket objects window
                     _SourceBucketObjectsWindow = new BucketObjectsWindow(sourceRegionBucketAndPrefix, _State.SourceBatchId, _State.LastKeyOfLastBatchCompleted, _GrantCannedAcl);
                     // initialize the target bucket objects window
-                    _TargetBucketObjectsWindow = new BucketObjectsWindow(targetRegionBucketAndPrefix, new BatchIdCounter(), _State.LastKeyOfLastBatchCompleted, _GrantCannedAcl, _Grant);
+                    _TargetBucketObjectsWindow = new BucketObjectsWindow(targetRegionBucketAndPrefix, new BatchIdCounter(), _State.LastKeyOfLastBatchCompleted, _GrantCannedAcl, _Grant, _TargetEncryptionMethod);
                     // fire up a thread to dump the status every few seconds
                     Thread statusDumper = new Thread(new ThreadStart(StatusDumper));
                     statusDumper.Name = "StatusDumper";
@@ -373,6 +385,19 @@ Logging and Saved State:
                 case "public-read": return S3CannedACL.PublicRead;
                 case "public-read-write": return S3CannedACL.PublicReadWrite;
                 default: return null;
+            }
+        }
+        private static ServerSideEncryptionMethod CreateTargetEncryptionMethod(string encryptionMethod)
+        {
+            switch (encryptionMethod)
+            {
+                default:
+                    throw new ArgumentException("Unknown encryption method: " + encryptionMethod + "!");
+                case null:
+                case "None":
+                    return null;
+                case "AES256":
+                    return new ServerSideEncryptionMethod("AES256");
             }
         }
         /// <summary>
