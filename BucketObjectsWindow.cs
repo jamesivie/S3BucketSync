@@ -51,22 +51,26 @@ namespace S3BucketSync
         private string _unprefixedLeastKey;
         private string _unprefixedGreatestKey;
         private string _startAtKey;
+        private string _stopAtKey;
         private string _continuationToken;
         private string _lastQuery;
 
         /// <summary>
-        /// Constructs a new empty TargetBucketObjectsWindow.
+        /// Constructs a new empty BucketObjectsWindow.
         /// </summary>
         /// <param name="regionBucketAndPrefix">The region, bucket, and prefix, in the following form: [region:]bucket/prefix.</param>
         /// <param name="batchIdCounter">The <see cref="BatchIdCounter"/> for this window.</param>
         /// <param name="unprefixedStartAtKey">The key to start at or <b>null</b> to start at the beginning.</param>
+        /// <param name="unprefixedStopAtKey">The key to stop at or <b>null</b> to start at the beginning.</param>
         /// <param name="cannedAcl">A <see cref="S3CannedACL"/> to use for the target file.</param>
         /// <param name="grant">A <see cref="S3Grant"/> indicating rights grants to apply to the target file.</param>
-        public BucketObjectsWindow(string regionBucketAndPrefix, BatchIdCounter batchIdCounter, string unprefixedStartAtKey = null, S3CannedACL cannedAcl = null, S3Grant grant = null, ServerSideEncryptionMethod targetEncryptionMethod = null)
+        public BucketObjectsWindow(string regionBucketAndPrefix, BatchIdCounter batchIdCounter, string unprefixedStartAtKey = null, string unprefixedStopAtKey = null, S3CannedACL cannedAcl = null, S3Grant grant = null, ServerSideEncryptionMethod targetEncryptionMethod = null)
         {
             _batchIdCounter = batchIdCounter;
             Tuple<string, string, string> parsedRegionBucketAndPrefix = ParseRegionBucketAndPrefix(regionBucketAndPrefix);
-            Amazon.RegionEndpoint region = Amazon.RegionEndpoint.GetBySystemName(parsedRegionBucketAndPrefix.Item1);
+            Amazon.RegionEndpoint region = Amazon.RegionEndpoint.GetBySystemName(string.IsNullOrEmpty(parsedRegionBucketAndPrefix.Item1)
+                ? GetBucketRegion(parsedRegionBucketAndPrefix.Item2)
+                : parsedRegionBucketAndPrefix.Item1);
             _s3 = new AmazonS3Client(region);
             _bucket = parsedRegionBucketAndPrefix.Item2;
             _prefix = parsedRegionBucketAndPrefix.Item3;
@@ -82,38 +86,18 @@ namespace S3BucketSync
             {
                 _unprefixedLeastKey = string.Empty;
             }
+            if (!string.IsNullOrEmpty(unprefixedStopAtKey))
+            {
+                _stopAtKey = _prefix + unprefixedStopAtKey;
+            }
             _unprefixedGreatestKey = string.Empty;
             _targetEncryptionMethod = targetEncryptionMethod;
         }
 
-        /// <summary>
-        /// Separates the bucket and prefix from the combined string.
-        /// </summary>
-        /// <param name="regionBucketAndPrefix">A string with the optional region, bucket, and prefix, with a colon as the region/bucket delimiter and slash as the bucket/prefix delimiter.</param>
-        /// <returns>A 3-tuple with the region, bucket, and prefix separated out.</returns>
-        private static Tuple<string, string, string> ParseRegionBucketAndPrefix(string regionBucketAndPrefix)
+        public static string NormalizeRegionBucketAndPrefix(string regionBucketAndPrefix)
         {
-            int slashOffset = regionBucketAndPrefix.IndexOf('/');
-            string regionAndBucket;
-            string prefix;
-            if (slashOffset < 0)
-            {
-                regionAndBucket = regionBucketAndPrefix;
-                prefix = string.Empty;
-            }
-            else
-            {
-                regionAndBucket = regionBucketAndPrefix.Substring(0, slashOffset);
-                prefix = regionBucketAndPrefix.Substring(slashOffset + 1);
-            }
-            Tuple<string, string> parsedRegionAndBucket = ParseRegionAndBucket(regionAndBucket);
-            return new Tuple<string, string, string>(parsedRegionAndBucket.Item1, parsedRegionAndBucket.Item2, prefix);
-        }
-        private static Tuple<string, string> ParseRegionAndBucket(string regionAndBucket)
-        {
-            int colonOffset = regionAndBucket.IndexOf(':');
-            if (colonOffset < 0) return new Tuple<string, string>(regionAndBucket, string.Empty);
-            return new Tuple<string, string>(regionAndBucket.Substring(0, colonOffset), regionAndBucket.Substring(colonOffset + 1));
+            Tuple<string, string, string> parsedRegionBucketAndPrefix = ParseRegionBucketAndPrefix(regionBucketAndPrefix);
+            return (string.IsNullOrEmpty(parsedRegionBucketAndPrefix.Item1) ? GetBucketRegion(parsedRegionBucketAndPrefix.Item2) : parsedRegionBucketAndPrefix.Item1) + ":" + parsedRegionBucketAndPrefix.Item2 + "/" + parsedRegionBucketAndPrefix.Item3;
         }
 
         public static byte[] ComputeMD5Hash(Stream stream)
@@ -232,10 +216,10 @@ namespace S3BucketSync
             Interlocked.Exchange(ref _continuationToken, response.NextContinuationToken);
             Interlocked.Exchange(ref _startAtKey, null);
             // build the batch for the target objects
-            Batch batch = new Batch(_prefix, batchId, response);
+            Batch batch = new Batch(_prefix, batchId, _stopAtKey, response);
             // we should only ever add batches whose key ranges are after the ones we already had
-            if (!string.IsNullOrEmpty(_unprefixedGreatestKey) && String.CompareOrdinal(batch.LeastKey, _unprefixedGreatestKey) < 0) throw new InvalidOperationException("The specified response is for objects that are lesser than the ones already processing.  Responses must be processed in order.");
-            if (!string.IsNullOrEmpty(_unprefixedGreatestKey) && String.CompareOrdinal(batch.GreatestKey, _unprefixedGreatestKey) < 0) throw new InvalidOperationException("The specified response is for objects that are lesser than the ones already processing.  Responses must be processed in order.");
+            if (!string.IsNullOrEmpty(_unprefixedGreatestKey) && String.CompareOrdinal(batch.LeastKey, _unprefixedGreatestKey) < 0) throw new InvalidOperationException("The specified response is for objects that are lesser than the ones already processing.  Responses must be processed in order (" + batch.LeastKey + "/" + _unprefixedGreatestKey + ").");
+            if (!string.IsNullOrEmpty(_unprefixedGreatestKey) && String.CompareOrdinal(batch.GreatestKey, _unprefixedGreatestKey) < 0) throw new InvalidOperationException("The specified response is for objects that are lesser than the ones already processing.  Responses must be processed in order (" + batch.GreatestKey + "/" + _unprefixedGreatestKey + ").");
             // no least key specified yet? use the one from the batch
             if (string.IsNullOrEmpty(_unprefixedLeastKey)) Interlocked.Exchange(ref _unprefixedLeastKey, batch.LeastKey);
             // the greatest key should be the one from this new batch
@@ -255,7 +239,7 @@ namespace S3BucketSync
             request.BucketName = _bucket;
             request.Prefix = _prefix;
             request.ContinuationToken = _continuationToken;
-            request.StartAfter = _startAtKey;
+            if (_startAtKey != null) request.StartAfter = _startAtKey;
             return request;
         }
 
@@ -334,7 +318,7 @@ namespace S3BucketSync
             // else already synchronized
             else
             {
-                Program.State.TrackObject(targetObject, false, false);
+                Program.State.TrackObject(_prefix, targetObject, false, false);
             }
             // no processing was required, so return null (this should keep everything except for the actual copy operations out of the thread pool)
             return null;
@@ -409,7 +393,7 @@ namespace S3BucketSync
             private readonly string _continuationToken;
             private readonly string _nextContinuationToken;
 
-            public Batch(string prefix, int batchId, ListObjectsV2Response response)
+            public Batch(string prefix, int batchId, string stopBeforeKey, ListObjectsV2Response response)
             {
                 _batchId = batchId;
                 _response = response;
@@ -422,6 +406,13 @@ namespace S3BucketSync
                 foreach (S3Object o in response.S3Objects)
                 {
                     System.Diagnostics.Debug.Assert(o.Key.StartsWith(prefix));
+                    // if a stop key was specified, was this object's key past the end we care about?  stop here
+                    if (!string.IsNullOrEmpty(stopBeforeKey) && String.CompareOrdinal(o.Key, stopBeforeKey) >= 0)
+                    {
+                        // treat this as if we hit the end because we're at the end of the range specified by the caller
+                        response.IsTruncated = false;
+                        break;
+                    }
                     // the key is the S3 key with the specified prefix removed (in case we're copying from one prefix to another)
                     string key = o.Key.Substring(prefix.Length);
                     _objects.Add(key, o);
@@ -474,6 +465,54 @@ namespace S3BucketSync
                     return null;
                 }
             }
+        }
+        public static string GetBucketRegion(string bucketName)
+        {
+            try
+            {
+                AmazonS3Client s3 = new AmazonS3Client(Amazon.RegionEndpoint.USEast1);
+                GetBucketLocationResponse response = s3.GetBucketLocation(new GetBucketLocationRequest { BucketName = bucketName });
+                return string.IsNullOrEmpty(response.Location.Value) ? Amazon.RegionEndpoint.USEast1.SystemName : response.Location.Value;
+            }
+            catch (Exception ex)
+            {
+                throw new ApplicationException("Unable to query region for bucket '" + bucketName + "'", ex);
+            }
+        }
+        /// <summary>
+        /// Separates the region, bucket, and prefix from the combined string.
+        /// </summary>
+        /// <param name="regionBucketAndPrefix">A string with the optional region, bucket, and prefix, with a colon as the region/bucket delimiter and slash as the bucket/prefix delimiter.</param>
+        /// <returns>A 3-tuple with the region, bucket, and prefix separated out.</returns>
+        public static Tuple<string, string, string> ParseRegionBucketAndPrefix(string regionBucketAndPrefix)
+        {
+            int slashOffset = regionBucketAndPrefix.IndexOf('/');
+            string regionAndBucket;
+            string prefix;
+            if (slashOffset < 0)
+            {
+                regionAndBucket = regionBucketAndPrefix;
+                prefix = string.Empty;
+            }
+            else
+            {
+                regionAndBucket = regionBucketAndPrefix.Substring(0, slashOffset);
+                prefix = regionBucketAndPrefix.Substring(slashOffset + 1);
+            }
+            Tuple<string, string> parsedRegionAndBucket = ParseRegionAndBucket(regionAndBucket);
+            return new Tuple<string, string, string>(parsedRegionAndBucket.Item1, parsedRegionAndBucket.Item2, prefix);
+        }
+        public static Tuple<string, string> ParseRegionAndBucket(string regionAndBucket)
+        {
+            int colonOffset = regionAndBucket.IndexOf(':');
+            if (colonOffset < 0) return new Tuple<string, string>(string.Empty, regionAndBucket);
+            return new Tuple<string, string>(regionAndBucket.Substring(0, colonOffset), regionAndBucket.Substring(colonOffset + 1));
+        }
+        public static Tuple<string, string> ParseBucketAndPrefix(string regionAndBucket)
+        {
+            int slashOffset = regionAndBucket.IndexOf('/');
+            if (slashOffset < 0) return new Tuple<string, string>(regionAndBucket, string.Empty);
+            return new Tuple<string, string>(regionAndBucket.Substring(0, slashOffset), regionAndBucket.Substring(slashOffset + 1));
         }
     }
 }

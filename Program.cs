@@ -38,7 +38,7 @@ namespace S3BucketSync
         static private string _StateFilePath;
         static private string _LogFilePath;
         static private string _ErrorFilePath;
-        static private bool _Verbose;
+        static private int _Verbosity;
         static private S3CannedACL _GrantCannedAcl;
         static private S3Grant _Grant;
         static private ServerSideEncryptionMethod _TargetEncryptionMethod;
@@ -50,8 +50,8 @@ namespace S3BucketSync
         static private int _PendingCompares;            // interlocked
         static private int _TimeoutSeconds = 10 * 60;   // the default timeout is 10 minutes
         static private int _RetryCount = 4;
-        static private int _BatchesToQueue = 250;
-        static private int _ConcurrentCopies = 10000;
+        static private int _BatchesToQueue = 100;
+        static private int _ConcurrentCopies = Environment.ProcessorCount * 1000;
 
         /// <summary>
         /// Gets the <see cref="State"/> object so we can save where we are and what we've accomplished.
@@ -74,12 +74,14 @@ namespace S3BucketSync
                 string grantString = null;
                 string encryptionMethodString = null;
                 bool reset = false;
+                string startKey = null;
+                string stopKey = null;
                 // no arguments or not enough arguments?
                 if (args.Length < 2)
                 {
                     Console.WriteLine(@"
 S3BucketSync Usage:
-    S3BucketSync <source_region>:<source_bucket>[source_prefix] <target_region>:<target_bucket>[target_prefix] [common_prefix] [-b] [-v] [-ofc] [-g <account_email>] [-g <canned_acl_name>]
+    S3BucketSync [source_region:]<source_bucket>[source_prefix] [target_region:]<target_bucket>[target_prefix] [common_prefix] [-b] [-v[level]] [-e] [-c] [-q] [-r] [-t] [-g <account_email>] [-g <canned_acl_name>] [-start <start_key>] [-stop <stop_key>]
 
 Purpose:
     Copies or updates objects from the source bucket to the destination bucket if the object doesn't exist in the destination bucket or the Etag of the corresponding object does not match
@@ -87,7 +89,7 @@ Purpose:
 Options:
     common_prefix is an optional prefix string that is appended to both the source_prefix and target_prefix just to save typing the same prefixes for two different buckets
     -b means restart at the beginning, ignore any saved state
-    -v means output extra messages to see more details of what's going on
+    -v means output extra messages to see more details of what's going on, with the specified level (1 is default)
     -g grants the account represented by the email full rights, or grant according the the specified canned ACL
     -t is the copy timeout in seconds (the default is 10 minutes)
     -r is the batch retry count (the default is 4)
@@ -132,7 +134,13 @@ Logging and Saved State:
                         }
                         else if (argument.ToLowerInvariant().StartsWith("-v"))
                         {
-                            _Verbose = true;
+                            int verbosity = 1;
+                            string level = argument.Substring(2);
+                            if (!string.IsNullOrEmpty(level))
+                            {
+                                if (!Int32.TryParse(argument.Substring(2), out verbosity)) throw new ArgumentException("The verbosity contain only decimal digits!");
+                            }
+                            _Verbosity = verbosity;
                         }
                         else if (argument.ToLowerInvariant().StartsWith("-g"))
                         {
@@ -143,7 +151,7 @@ Logging and Saved State:
                         }
                         else if (argument.ToLowerInvariant().StartsWith("-e"))
                         {
-                            if (narg + 1 >= args.Length) throw new ArgumentException("-e must be followed by the encruption method for the target (probably \"AES256\") !");
+                            if (narg + 1 >= args.Length) throw new ArgumentException("-e must be followed by the encryption method for the target (probably \"AES256\") !");
                             string arg = args[narg + 1];
                             encryptionMethodString = arg;
                             ++narg;
@@ -176,11 +184,30 @@ Logging and Saved State:
                             if (!Int32.TryParse(arg, out _ConcurrentCopies)) throw new ArgumentException("The concurrent copy count must contain only decimal digits!");
                             ++narg;
                         }
+                        else if (argument.ToLowerInvariant().StartsWith("-start"))
+                        {
+                            if (narg + 1 >= args.Length) throw new ArgumentException("-start must be followed by the start key!");
+                            string arg = args[narg + 1];
+                            startKey = arg;
+                            ++narg;
+                        }
+                        else if (argument.ToLowerInvariant().StartsWith("-stop"))
+                        {
+                            if (narg + 1 >= args.Length) throw new ArgumentException("-stop must be followed by the stop key!");
+                            string arg = args[narg + 1];
+                            stopKey = arg;
+                            ++narg;
+                        }
                     }
                     else if (string.IsNullOrEmpty(sourceRegionBucketAndPrefix)) sourceRegionBucketAndPrefix = argument;
                     else if (string.IsNullOrEmpty(targetRegionBucketAndPrefix)) targetRegionBucketAndPrefix = argument;
                     else if (string.IsNullOrEmpty(commonPrefix)) commonPrefix = argument;
                 }
+                if (string.IsNullOrEmpty(sourceRegionBucketAndPrefix)) throw new ArgumentException("You must specify a source bucket!");
+                if (string.IsNullOrEmpty(targetRegionBucketAndPrefix)) throw new ArgumentException("You must specify a target bucket!");
+                // normalize the source and target
+                sourceRegionBucketAndPrefix = BucketObjectsWindow.NormalizeRegionBucketAndPrefix(sourceRegionBucketAndPrefix);
+                targetRegionBucketAndPrefix = BucketObjectsWindow.NormalizeRegionBucketAndPrefix(targetRegionBucketAndPrefix);
                 // a common prefix (append to source and destination)
                 if (!string.IsNullOrEmpty(commonPrefix))
                 {
@@ -190,9 +217,15 @@ Logging and Saved State:
                 }
 
                 string currentDirectory = Environment.CurrentDirectory;
-                _StateFilePath = Path.Combine(currentDirectory, "state." + sourceRegionBucketAndPrefix.Replace(":", "_").Replace("/", "_") + ".bin");
-                _LogFilePath = Path.Combine(currentDirectory, "log." + sourceRegionBucketAndPrefix.Replace(":", "_").Replace("/", "_") + ".txt");
-                _ErrorFilePath = Path.Combine(currentDirectory, "error." + sourceRegionBucketAndPrefix.Replace(":", "_").Replace("/", "_") + ".txt");
+                string baseStateFilename = sourceRegionBucketAndPrefix.Replace(":", "_").Replace("/", "_");
+                if (!string.IsNullOrEmpty(startKey) || !string.IsNullOrEmpty(stopKey))
+                {
+                    baseStateFilename = baseStateFilename + "." + (startKey ?? "").Replace("/", "_") + "-" + (stopKey ?? "").Replace("/", "_");
+                }
+                _StateFilePath = Path.Combine(currentDirectory, "state." + baseStateFilename + ".bin");
+                _LogFilePath = Path.Combine(currentDirectory, "log." + baseStateFilename + ".txt");
+                _ErrorFilePath = Path.Combine(currentDirectory, "error." + baseStateFilename + ".txt");
+                string rangeString = (startKey == null && stopKey == null) ? "" : (" with range " + ((startKey ?? "") + "-" + (stopKey ?? "")));
                 // open the log file and error file
                 using (_Log = new StreamWriter(_LogFilePath, true, Encoding.UTF8))
                 using (_Error = new StreamWriter(_ErrorFilePath, true, Encoding.UTF8))
@@ -200,8 +233,8 @@ Logging and Saved State:
                     // possible resume?
                     if (!reset)
                     {
-                        // read the previous state (if it's a state for the same source and target)
-                        State resumeState = State.Read(_StateFilePath, sourceRegionBucketAndPrefix, targetRegionBucketAndPrefix);
+                        // read the previous state (if it's a state for the same source, target, and range)
+                        State resumeState = State.Read(_StateFilePath, sourceRegionBucketAndPrefix, targetRegionBucketAndPrefix, startKey, stopKey);
                         if (resumeState != null)
                         {
                             _State = resumeState;
@@ -212,7 +245,7 @@ Logging and Saved State:
                     if (_State == null)
                     {
                         // use a default state
-                        _State = new State(sourceRegionBucketAndPrefix, targetRegionBucketAndPrefix, grantString, encryptionMethodString);
+                        _State = new State(sourceRegionBucketAndPrefix, targetRegionBucketAndPrefix, grantString, encryptionMethodString, startKey, stopKey);
                     }
                     S3CannedACL cannedAcl = CreateS3CannedACL(_State.GrantString);
                     // A supported canned ACL?
@@ -228,11 +261,11 @@ Logging and Saved State:
                     // target encryption?
                     _TargetEncryptionMethod = CreateTargetEncryptionMethod(_State.EncryptionMethod);
 
-                    Program.Log(Environment.NewLine + "Start Sync from " + sourceRegionBucketAndPrefix + " to " + targetRegionBucketAndPrefix + grantDisplayString);
+                    Program.Log(Environment.NewLine + "Sync from " + sourceRegionBucketAndPrefix + " to " + targetRegionBucketAndPrefix + grantDisplayString + rangeString);
                     // initialize the source bucket objects window
-                    _SourceBucketObjectsWindow = new BucketObjectsWindow(sourceRegionBucketAndPrefix, _State.SourceBatchId, _State.LastKeyOfLastBatchCompleted, _GrantCannedAcl);
+                    _SourceBucketObjectsWindow = new BucketObjectsWindow(sourceRegionBucketAndPrefix, _State.SourceBatchId, _State.LastKeyOfLastBatchCompleted, _State.StopKey, _GrantCannedAcl);
                     // initialize the target bucket objects window
-                    _TargetBucketObjectsWindow = new BucketObjectsWindow(targetRegionBucketAndPrefix, new BatchIdCounter(), _State.LastKeyOfLastBatchCompleted, _GrantCannedAcl, _Grant, _TargetEncryptionMethod);
+                    _TargetBucketObjectsWindow = new BucketObjectsWindow(targetRegionBucketAndPrefix, new BatchIdCounter(), _State.LastKeyOfLastBatchCompleted, null, _GrantCannedAcl, _Grant, _TargetEncryptionMethod);
                     // fire up a thread to dump the status every few seconds
                     Thread statusDumper = new Thread(new ThreadStart(StatusDumper));
                     statusDumper.Name = "StatusDumper";
@@ -293,6 +326,22 @@ Logging and Saved State:
                                 }
                             }
                         }
+                        using (TrackOperation("MAIN: Queueing complete: Waiting for processing"))
+                        {
+                            // we're done getting all the objects, but we still need to finish processing them
+                            while (!processor.Join(100))
+                            {
+                                if (_AsyncException != null) throw _AsyncException;
+                                if (ExitKeyPressed())
+                                {
+                                    // log the end state
+                                    Program.Log(_State.ToString());
+                                    return 2;
+                                }
+                            }
+                        }
+                        // the source processing is now complete
+                        Interlocked.Exchange(ref _SourceProcessingComplete, 1);
                     }
                     catch (Exception ex)
                     {
@@ -308,25 +357,9 @@ Logging and Saved State:
                     {
                         WorkerPool.Stop();
                     }
-                    using (TrackOperation("MAIN: Queueing complete: Waiting for processing"))
-                    {
-                        // we're done getting all the objects, but we still need to finish processing them
-                        while (!processor.Join(100))
-                        {
-                            if (_AsyncException != null) throw _AsyncException;
-                            if (ExitKeyPressed())
-                            {
-                                // log the end state
-                                Program.Log(_State.ToString());
-                                return 2;
-                            }
-                        }
-                    }
-                    // the source processing is now complete
-                    Interlocked.Exchange(ref _SourceProcessingComplete, 1);
                     _State.Delete(_StateFilePath);
                     Program.Log("");
-                    Program.Log("This run synchronized " + _ObjectsProcessedThisRun + "/" + _SourceObjectsReadThisRun + " objects against " + _TargetObjectsReadThisRun + " objects: ");
+                    Program.Log("This run synchronized " + _ObjectsProcessedThisRun + "/" + _SourceObjectsReadThisRun + " objects against " + _TargetObjectsReadThisRun + " objects" + rangeString + ": ");
                     Program.Log(_State.Report());
                     _Log.Flush();
                     _Error.Flush();
@@ -420,19 +453,31 @@ Logging and Saved State:
                     long bytesCopiedOrUpdated = Program.State.BytesCopied + Program.State.BytesUpdated;
                     // wait for a bit
                     Thread.Sleep(5000);
-                    // write out the status
-                    string state = Program.State.ToString();
-                    state += " Q:" + _SourceBucketObjectsWindow.BatchesQueued.ToString();
-                    state += " P:" + _batchesProcessing.ToString();
-                    state += " C:" + _CopiesInProgress.ToString();
-                    if (seconds > 1.0)
+                    if (_Verbosity < 1)
                     {
-                        state += " OP/s:" + State.MagnitudeConvert((objectsProcessed - lastObjectsProcessed) / seconds, 2);
-                        state += " BP/s:" + State.MagnitudeConvert((bytesProcessed - lastBytesProcessed) / seconds, 2);
-                        state += " BC/s:" + State.MagnitudeConvert((bytesCopiedOrUpdated - lastBytesCopiedOrUpdated) / seconds, 2);
+                        string allDoneUpTo = Program.State.LastKeyOfLastBatchCompleted;
+                        allDoneUpTo = Truncate(allDoneUpTo);
+                        string someDoneUpTo = Program.State.GreatestKeyCompleted;
+                        someDoneUpTo = Truncate(someDoneUpTo);
+                        string rate = seconds > 0 ? (State.MagnitudeConvert((bytesCopiedOrUpdated - lastBytesCopiedOrUpdated) / seconds, 2) + "B/s") : "";
+                        string state = allDoneUpTo + "---" + someDoneUpTo + " " + rate + "       ";
+                        Console.Write("\r" + state + "\r");
                     }
-                    Console.WriteLine(state);
-
+                    else
+                    {
+                        // write out the status
+                        string state = Program.State.ToString();
+                        state += " Q:" + _SourceBucketObjectsWindow.BatchesQueued.ToString();
+                        state += " P:" + _batchesProcessing.ToString();
+                        state += " C:" + _CopiesInProgress.ToString();
+                        if (seconds > 1.0)
+                        {
+                            state += " OP/s:" + State.MagnitudeConvert((objectsProcessed - lastObjectsProcessed) / seconds, 2);
+                            state += " BP/s:" + State.MagnitudeConvert((bytesProcessed - lastBytesProcessed) / seconds, 2);
+                            state += " BC/s:" + State.MagnitudeConvert((bytesCopiedOrUpdated - lastBytesCopiedOrUpdated) / seconds, 2);
+                        }
+                        Console.WriteLine(state);
+                    }
                     lastLoopTime = loopTime;
                     lastObjectsProcessed = objectsProcessed;
                     lastBytesProcessed = bytesProcessed;
@@ -444,6 +489,16 @@ Logging and Saved State:
                 }
             }
         }
+
+        private static string Truncate(string key, int length = 30)
+        {
+            if (key.Length > length)
+            {
+                return key.Substring(0, length / 2 - 2) + "..." + key.Substring(key.Length - (length / 2 - 1));
+            }
+            return key;
+        }
+
         /// <summary>
         /// A static function that loops expanding the target window to follow the source items being processed.
         /// </summary>
@@ -507,6 +562,17 @@ Logging and Saved State:
                     }
                 }
             }
+        }
+        enum BatchState
+        {
+            Initializing,
+            WaitingForTarget,
+            ComparingFiles,
+            WaitFirstPass,
+            SecondPass,
+            WaitSecondPass,
+            WaitPreviousBatch,
+            Cleanup,
         }
         static WorkerPool _processingPool = new WorkerPool("BatchProcessingPool", ThreadPriority.Normal, false);
         static WorkerPool _copyPool = new WorkerPool("CopyPool", ThreadPriority.Normal, false);
@@ -581,9 +647,10 @@ Logging and Saved State:
                                 int batchItems = 1000;
                                 int alreadyUpToDate = 0;
                                 string paddedBatchId = batch.BatchId.ToString().PadLeft(6, ' ');
+                                BatchState batchState = BatchState.Initializing;
                                 // keep track of the work that needs doing
                                 ConcurrentDictionary<int, BucketObjectsWindow.NeededCopyInfo> workToDo = new ConcurrentDictionary<int, BucketObjectsWindow.NeededCopyInfo>();
-                                using (TrackOperation("BATCH " + paddedBatchId + " COMPLETION: ", () => BatchStatus(batchItems, alreadyUpToDate, workToDo)))
+                                using (TrackOperation("BATCH " + paddedBatchId + " COMPLETION: ", () => BatchStatus(batchState, batchItems, alreadyUpToDate, workToDo)))
                                 {
                                     int objectsToBeCopied = 0;
                                     // first compute the work that needs doing and start a task for each one asynchronously
@@ -594,6 +661,7 @@ Logging and Saved State:
                                         string lastKey = batch.GreatestKey;
                                         using (TrackOperation("BATCH " + paddedBatchId + " WAIT: Waiting for target window to include " + lastKey + " first try"))
                                         {
+                                            batchState = BatchState.WaitingForTarget;
                                             // wait until the target window ready to process all the items in this batch (it almost always should be ready to go already)
                                             while (String.CompareOrdinal(lastKey, _TargetBucketObjectsWindow.UnprefixedGreatestKey) > 0)
                                             {
@@ -605,6 +673,7 @@ Logging and Saved State:
                                         DateTime modificationCutoffTime = DateTime.UtcNow.AddMinutes(-15);
                                         using (TrackOperation("BATCH " + paddedBatchId + " COMPARE: Comparing files first try"))
                                         {
+                                            batchState = BatchState.ComparingFiles;
                                             List<S3Object> objects = batch.Response.S3Objects;
                                             int count = objects.Count;
                                             batchItems = count;
@@ -647,7 +716,7 @@ Logging and Saved State:
                                                             if (copyInfo.TargetObject != null) operation += " " + copyInfo.SourceObject.ETag + " vs " + copyInfo.TargetObject.ETag;
                                                             Program.LogVerbose(operation);
                                                             // track what the operation we just completed successfully
-                                                            Program.State.TrackObject(copyInfo.SourceObject, copyInfo.TargetObject == null, copyInfo.TargetObject != null);
+                                                            Program.State.TrackObject(sourcePrefix, copyInfo.SourceObject, copyInfo.TargetObject == null, copyInfo.TargetObject != null);
                                                         }
                                                         catch (AmazonS3Exception ex)
                                                         {
@@ -658,7 +727,7 @@ Logging and Saved State:
                                                             if (copyInfo.TargetObject != null) operation += " " + copyInfo.SourceObject.ETag + " vs " + copyInfo.TargetObject.ETag;
                                                             Program.LogVerbose(operation);
                                                             // track what the operation we just completed successfully
-                                                            Program.State.TrackObject(copyInfo.SourceObject, copyInfo.TargetObject == null, copyInfo.TargetObject != null);
+                                                            Program.State.TrackObject(sourcePrefix, copyInfo.SourceObject, copyInfo.TargetObject == null, copyInfo.TargetObject != null);
                                                         }
                                                         finally
                                                         {
@@ -677,9 +746,10 @@ Logging and Saved State:
                                         pendingSubtract = 0;
                                         // save the count in case we need to retry
                                         objectsToBeCopied = workToDo.Count;
-                                        // this batch is complete only when the previous batch is complete and all the file copies finish
+                                        // wait for a while for the first attempt to complete
                                         using (TrackOperation("BATCH " + paddedBatchId + " PASS1: Waiting for first pass to timeout or complete"))
                                         {
+                                            batchState = BatchState.WaitFirstPass;
                                             // wait for the tasks and catch any exceptions from them
                                             Task.WaitAll(workToDo.Values.Select(w => w.Task).ToArray());
                                             // if we get here without throwing, it means we successfully copied all the files, so we can clear the work to do list so we skip the non-async 2nd pass below
@@ -706,7 +776,8 @@ Logging and Saved State:
                                     // still more work to do?
                                     if (workToDo.Count > 0)
                                     {
-                                        // save the count while we attempt to process items synchronously
+                                        batchState = BatchState.SecondPass;
+                                        // save the count while we attempt to process items using the worker pool
                                         BucketObjectsWindow.NeededCopyInfo[] leftToDo = workToDo.Values.Where(c => c.Task.IsCanceled || c.Task.IsFaulted).ToArray();
                                         Program.LogVerbose("Batch " + batch.BatchId + " retrying " + leftToDo.Length + " failed operations without async.");
                                         foreach (BucketObjectsWindow.NeededCopyInfo neededCopyInfo in leftToDo)
@@ -743,7 +814,7 @@ Logging and Saved State:
                                                            if (copyInfo.TargetObject != null) operation += " " + copyInfo.SourceObject.ETag + " vs " + copyInfo.TargetObject.ETag;
                                                            Program.LogVerbose(operation);
                                                            // track what the operation we just completed successfully
-                                                           Program.State.TrackObject(copyInfo.SourceObject, copyInfo.TargetObject == null, copyInfo.TargetObject != null);
+                                                           Program.State.TrackObject(sourcePrefix, copyInfo.SourceObject, copyInfo.TargetObject == null, copyInfo.TargetObject != null);
                                                            // success-no need to loop any more
                                                            break;
                                                        }
@@ -759,7 +830,7 @@ Logging and Saved State:
                                                            if (copyInfo.TargetObject != null) operation += " " + copyInfo.SourceObject.ETag + " vs " + copyInfo.TargetObject.ETag;
                                                            Program.LogVerbose(operation);
                                                            // track what the operation we just completed successfully
-                                                           Program.State.TrackObject(copyInfo.SourceObject, copyInfo.TargetObject == null, copyInfo.TargetObject != null);
+                                                           Program.State.TrackObject(sourcePrefix, copyInfo.SourceObject, copyInfo.TargetObject == null, copyInfo.TargetObject != null);
                                                        }
                                                        finally
                                                        {
@@ -773,6 +844,7 @@ Logging and Saved State:
                                     int remaining = -1;
                                     using (TrackOperation("BATCH " + paddedBatchId + " RETRYWAIT: Waiting for non-async copies: ", () => (remaining < 0) ? "unknown" : remaining.ToString()))
                                     {
+                                        batchState = BatchState.WaitSecondPass;
                                         while ((remaining = workToDo.Values.Where(c => c != null && c.Task != null && (c.Task.IsCanceled || c.Task.IsFaulted)).Count()) > 0)
                                         {
                                             System.Threading.Thread.Sleep(500);
@@ -781,10 +853,12 @@ Logging and Saved State:
                                     // we're now done, but we may need to wait for the previous batch before marking ourselves as processed (this way we only have to keep one bookmark)
                                     using (TrackOperation("BATCH " + paddedBatchId + " PREVBATCH: Waiting for previous batch"))
                                     {
+                                        batchState = BatchState.WaitPreviousBatch;
                                         previousBatchCompletedCopy.WaitOne();
                                     }
                                     using (TrackOperation("BATCH " + paddedBatchId + " CLEANUP: Finishing batch"))
                                     {
+                                        batchState = BatchState.Cleanup;
                                         // this batch is done, tell the window we're done processing this batch
                                         _SourceBucketObjectsWindow.MarkBatchProcessed(batch);
                                         // save the batch completion information into the state
@@ -816,15 +890,16 @@ Logging and Saved State:
                 }
             }
         }
-        private static string BatchStatus(int batchItems, int alreadyUpToDate, ConcurrentDictionary<int, BucketObjectsWindow.NeededCopyInfo> workToDo)
+        private static string BatchStatus(BatchState state, int batchItems, int alreadyUpToDate, ConcurrentDictionary<int, BucketObjectsWindow.NeededCopyInfo> workToDo)
         {
+            if (state <= BatchState.WaitingForTarget || state >= BatchState.WaitPreviousBatch) return state.ToString();
             float total = batchItems;
             int waiting;
             int running;
             int retry;
             int completed;
             TaskStatuses(workToDo.Values.Select(w => w.Task), out waiting, out running, out retry, out completed);
-            return String.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:0%}/{1:0%}/{2:0%}/{3:0%}", waiting / total, running / total, retry / total, (completed + alreadyUpToDate) / total);
+            return String.Format(System.Globalization.CultureInfo.InvariantCulture, "{0,-17}:{1:000%}/{2:000%}/{3:000%}/{4:000%}", state, waiting / total, running / total, retry / total, (completed + alreadyUpToDate) / total);
         }
         private static void TaskStatuses(IEnumerable<Task> tasks, out int waiting, out int running, out int syncRetry, out int completed)
         {
@@ -912,12 +987,45 @@ Logging and Saved State:
             }
         }
         /// <summary>
+        /// Logs an error message to the console and the error file.
+        /// </summary>
+        /// <param name="message">The message to write.</param>
+        /// <param name="details">Extra details to write.</param>
+        public static void Error(string message, string details)
+        {
+            Console.WriteLine(message + ":" + details);
+            try
+            {
+                if (_Error != null) _Error.WriteLine(message + ":" + details);
+            }
+            catch (ObjectDisposedException)
+            {
+                // ignore this exception
+            }
+        }
+        /// <summary>
+        /// Logs an error message to the console and the error file.
+        /// </summary>
+        /// <param name="ex">The exception to log.</param>
+        public static void RecordAsyncException(Exception ex)
+        {
+            Console.WriteLine("Asynchronous Exception:" + ex.ToString());
+            try
+            {
+                if (_Error != null) _Error.WriteLine("Asynchronous Exception:" + ex.ToString());
+            }
+            catch (ObjectDisposedException)
+            {
+                // ignore this exception
+            }
+        }
+        /// <summary>
         /// Logs a verbose message to the console and the log file.
         /// </summary>
         /// <param name="message">The message to write.</param>
         public static void LogVerbose(string message)
         {
-            if (_Verbose)
+            if (_Verbosity > 0)
             {
                 Console.WriteLine(message);
                 if (_Log != null) _Log.WriteLine(message);
@@ -929,6 +1037,7 @@ Logging and Saved State:
             if (Console.KeyAvailable)
             {
                 ConsoleKeyInfo key = Console.ReadKey(true);
+                Program.Log(Environment.NewLine);
                 if (key.Key == ConsoleKey.Escape)
                 {
                     Program.Log("ESC pressed--exiting program...");
@@ -1011,7 +1120,11 @@ Logging and Saved State:
                 OperationTracker greatestCopy = null;
                 foreach (OperationTracker operation in OperationTracker.EnumerateOperationsInProgress)
                 {
-                    if (level > 2 || (!operation.Description.Contains(" COPY: ") && !operation.Description.Contains(" RETRYCOPY")))
+                    if (operation.Description.Contains(" COMPLETION: "))
+                    {
+                        list.Add(operation);
+                    }
+                    else if (level > 3 || (level > 2 && (!operation.Description.Contains(" COPY: ") && !operation.Description.Contains(" RETRYCOPY"))))
                     {
                         list.Add(operation);
                     }
@@ -1021,7 +1134,7 @@ Logging and Saved State:
                         if (greatestCopy == null || String.CompareOrdinal(operation.Description, greatestCopy.Description) > 0) greatestCopy = operation;
                     }
                 }
-                if (level == 2)
+                if (level == 3)
                 {
                     if (leastCopy != null && greatestCopy != null)
                     {

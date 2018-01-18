@@ -56,6 +56,9 @@ namespace S3BucketSync
         private string _sourceContinuationToken;
         private int _lastCompletedBatchId;
         private string _lastKeyOfLastBatchCompleted;
+        private string _greatestKeyCompleted;
+        private string _startKey;
+        private string _stopKey;
         private string _lastCopyCompleted;
         private long _lastCopyDate;
         private string _lastUpdateCompleted;
@@ -127,7 +130,9 @@ namespace S3BucketSync
         /// <param name="targetRegionBucketAndPrefix">The target region, bucket, and prefix.</param>
         /// <param name="grant">A string indicating rights being granted to the target file.</param>
         /// <param name="encryptionMethod">A string indicating the encryption method to use for the target file.</param>
-        public State(string sourceRegionBucketAndPrefix, string targetRegionBucketAndPrefix, string grant, string encryptionMethod)
+        /// <param name="startKey">The key to start on.</param>
+        /// <param name="stopKey">The key to stop on.</param>
+        public State(string sourceRegionBucketAndPrefix, string targetRegionBucketAndPrefix, string grant, string encryptionMethod, string startKey, string stopKey)
         {
             _sourceRegionBucketAndPrefix = sourceRegionBucketAndPrefix;
             _targetRegionBucketAndPrefix = targetRegionBucketAndPrefix;
@@ -137,6 +142,9 @@ namespace S3BucketSync
             _unrecordedTimeStartTicks = _startDate.Ticks;
             _ticksUsed = 0;
             _sourceBatchId = new BatchIdCounter();
+            _startKey = startKey;
+            if (!string.IsNullOrEmpty(startKey)) _lastKeyOfLastBatchCompleted = startKey;
+            _stopKey = stopKey;
         }
         /// <summary>
         /// Gets a string representation of the state.
@@ -178,12 +186,15 @@ namespace S3BucketSync
             str.AppendFormat("Objects Updated: {0} ({1:F0}MB){2}", _objectsUpdated, _bytesUpdated / 1000000.0, Environment.NewLine);
             str.AppendFormat("Objects Processed: {0} ({1:F0}MB){2}", _objectsProcessed, _bytesProcessed / 1000000.0, Environment.NewLine);
             str.AppendFormat("Total Objects: {0} ({1:F0}MB){2}", _objects, _bytes / 1000000.0, Environment.NewLine);
-            str.AppendFormat("Earliest Object Date: {0}{1}", new DateTime(_earliestDate), Environment.NewLine);
-            str.AppendFormat("Earliest Copied Object Date: {0}{1}", new DateTime(_earliestCopiedDate), Environment.NewLine);
-            str.AppendFormat("Earliest Updated Object Date: {0}{1}", new DateTime(_earliestUpdatedDate), Environment.NewLine);
-            str.AppendFormat("Latest Object Date: {0}{1}", new DateTime(_latestDate), Environment.NewLine);
-            str.AppendFormat("Latest Copied Object Date: {0}{1}", new DateTime(_latestCopiedDate), Environment.NewLine);
-            str.AppendFormat("Latest Updated Object Date: {0}{1}", new DateTime(_latestUpdatedDate), Environment.NewLine);
+            if (!String.IsNullOrEmpty(_startKey)) str.AppendFormat("Start Key: {0}{1}", _startKey, Environment.NewLine);
+            if (!String.IsNullOrEmpty(_stopKey)) str.AppendFormat("Stop Key: {0}{1}", _stopKey, Environment.NewLine);
+            if (!String.IsNullOrEmpty(_greatestKeyCompleted)) str.AppendFormat("Greatest Object Key: {0}{1}", _greatestKeyCompleted, Environment.NewLine);
+            if (_earliestDate != DateTime.MaxValue.Ticks) str.AppendFormat("Earliest Object Date: {0}{1}", new DateTime(_earliestDate), Environment.NewLine);
+            if (_earliestCopiedDate != DateTime.MaxValue.Ticks) str.AppendFormat("Earliest Copied Object Date: {0}{1}", new DateTime(_earliestCopiedDate), Environment.NewLine);
+            if (_earliestUpdatedDate != DateTime.MaxValue.Ticks) str.AppendFormat("Earliest Updated Object Date: {0}{1}", new DateTime(_earliestUpdatedDate), Environment.NewLine);
+            if (_latestDate != DateTime.MinValue.Ticks) str.AppendFormat("Latest Object Date: {0}{1}", new DateTime(_latestDate), Environment.NewLine);
+            if (_latestCopiedDate != DateTime.MinValue.Ticks) str.AppendFormat("Latest Copied Object Date: {0}{1}", new DateTime(_latestCopiedDate), Environment.NewLine);
+            if (_latestUpdatedDate != DateTime.MinValue.Ticks) str.AppendFormat("Latest Updated Object Date: {0}{1}", new DateTime(_latestUpdatedDate), Environment.NewLine);
             if (_grant != null) str.AppendFormat("Grant: {0}{1}", _grant, Environment.NewLine);
             if (_encryptionMethod != null) str.AppendFormat("Encryption: {0}{1}", _encryptionMethod, Environment.NewLine);
             str.AppendLine();
@@ -220,6 +231,27 @@ namespace S3BucketSync
         public string LastKeyOfLastBatchCompleted
         {
             get { return _lastKeyOfLastBatchCompleted; }
+        }
+        /// <summary>
+        /// Gets the key of the greatest item that has been completed.
+        /// </summary>
+        public string GreatestKeyCompleted
+        {
+            get { return _greatestKeyCompleted; }
+        }
+        /// <summary>
+        /// Gets the key to start on (inclusive).
+        /// </summary>
+        public string StartKey
+        {
+            get { return _startKey; }
+        }
+        /// <summary>
+        /// Gets the key to stop on (exclusive).
+        /// </summary>
+        public string StopKey
+        {
+            get { return _stopKey; }
         }
         /// <summary>
         /// Gets the <see cref="BatchIdCounter"/> for the source batch window.
@@ -269,7 +301,7 @@ namespace S3BucketSync
         /// <param name="o">The <see cref="S3Object"/> being synchronized.</param>
         /// <param name="copied">Whether or not the item needed to be copied.</param>
         /// <param name="updated">Whether or not the item needed to be udpated.</param>
-        public void TrackObject(S3Object o, bool copied, bool updated)
+        public void TrackObject(string prefix, S3Object o, bool copied, bool updated)
         {
             if (copied)
             {
@@ -281,6 +313,7 @@ namespace S3BucketSync
                 Interlocked.Exchange(ref _lastUpdateCompleted, o.Key);
                 Interlocked.Exchange(ref _lastUpdateDate, o.LastModified.Ticks);
             }
+            InterlockedMax(ref _greatestKeyCompleted, o.Key.Substring(prefix.Length));
             InterlockedMin(ref _earliestDate, o.LastModified.Ticks);
             InterlockedMax(ref _latestDate, o.LastModified.Ticks);
             Interlocked.Add(ref _bytesProcessed, o.Size);
@@ -328,8 +361,10 @@ namespace S3BucketSync
         /// <param name="filename">The name of the file to read the state from.</param>
         /// <param name="sourceRegionBucketAndPrefix">The source region, bucket, and prefix.</param>
         /// <param name="targetRegionBucketAndPrefix">The target region, bucket, and prefix.</param>
+        /// <param name="startKey">The starting key.</param>
+        /// <param name="stopKey">The stopping key.</param>
         /// <returns>The <see cref="State"/> object.</returns>
-        public static State Read(string filename, string sourceRegionBucketAndPrefix, string targetRegionBucketAndPrefix)
+        public static State Read(string filename, string sourceRegionBucketAndPrefix, string targetRegionBucketAndPrefix, string startKey, string stopKey)
         {
             try
             {
@@ -342,10 +377,13 @@ namespace S3BucketSync
                     // we haven't been doing anything since we saved, so skip the unrecorded time ahead to now
                     read._unrecordedTimeStartTicks = DateTime.UtcNow.Ticks;
                     read._sourceBatchId = new BatchIdCounter(read._lastCompletedBatchId);
-                    // source or target mismatch?  don't use this one!
+                    // source, target, or start/stop mismatch?  don't use this one!
                     if (!String.Equals(sourceRegionBucketAndPrefix, read._sourceRegionBucketAndPrefix)
-                        || !String.Equals(targetRegionBucketAndPrefix, read._targetRegionBucketAndPrefix)) return null;
-                    // source and target match, so we're good to use this state to pick up where we left off
+                        || !String.Equals(targetRegionBucketAndPrefix, read._targetRegionBucketAndPrefix)
+                        || !String.Equals(startKey, read._startKey)
+                        || !String.Equals(stopKey, read._stopKey)
+                        ) return null;
+                    // it's a match, so we're good to use this state to pick up where we left off
                     return read;
                 }
             }
@@ -411,6 +449,30 @@ namespace S3BucketSync
                     continue;
                 }
             }
+        }
+        /// <summary>
+        /// Replaces the value with the specified value if the specified value is greater.
+        /// </summary>
+        /// <param name="valueReference">A reference to the value being manipulated.</param>
+        /// <param name="possibleNewMax">The value to replace the value with if it is greater.</param>
+        /// <returns>The new maximum value.</returns>
+        private static string InterlockedMax(ref string valueReference, string possibleNewMax)
+        {
+            string oldValue = valueReference;
+            // loop attempting to put it in until we win the race
+            while (String.CompareOrdinal(possibleNewMax, oldValue) > 0)
+            {
+                // try to put in our value--did we win the race?
+                if (oldValue == System.Threading.Interlocked.CompareExchange(ref valueReference, possibleNewMax, oldValue))
+                {
+                    // we're done and we were the new max
+                    return possibleNewMax;
+                }
+                // update our value
+                oldValue = valueReference;
+            }
+            // we're done and we were NOT the new max
+            return oldValue;
         }
         /// <summary>
         /// Replaces the value with the specified value if the specified value is greater.

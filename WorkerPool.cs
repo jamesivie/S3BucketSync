@@ -2,6 +2,7 @@
 using System.Threading;
 using System.Diagnostics;
 using System.Collections.Generic;
+using System.Collections.Concurrent;
 
 /*
 Copyright (c) 2016 James Ivie
@@ -74,8 +75,8 @@ namespace S3BucketSync
                 _pool = pool;
                 _poolName = pool.Name;
                 _id = id;
-                _wakeThread = new ManualResetEvent(false);
-                _allowDisposal = new ManualResetEvent(false);
+                _wakeThread = ManualResetEventPool.Take(false);
+                _allowDisposal = ManualResetEventPool.Take(false);
                 // start the thread, it should block immediately until a work unit is ready
                 _thread = new Thread(new ThreadStart(WorkerFunc));
                 _thread.Name = id;
@@ -106,9 +107,9 @@ namespace S3BucketSync
 
         public void Dispose()
         {
-            // dispose of the events
-            using (System.Threading.Interlocked.Exchange(ref _wakeThread, null)) { }
-            using (System.Threading.Interlocked.Exchange(ref _allowDisposal, null)) { }
+            // return the events to the pool
+            ManualResetEventPool.Return(_wakeThread); _wakeThread = null;
+            ManualResetEventPool.Return(_allowDisposal); _allowDisposal = null;
 #if DEBUG
             // suppress finalization
             System.GC.SuppressFinalize(this);
@@ -169,7 +170,7 @@ namespace S3BucketSync
             }
             catch (Exception e)
             {
-                if (!(e is ThreadAbortException)) Program.Error(String.Format(System.Globalization.CultureInfo.InvariantCulture, exceptionFormatString, _thread.Name, e.ToString()));
+                if (!(e is ThreadAbortException)) Program.Error(String.Format(System.Globalization.CultureInfo.InvariantCulture, exceptionFormatString, _thread.Name), e.ToString());
             }
         }
 
@@ -212,7 +213,7 @@ namespace S3BucketSync
                                         // perform the work
                                         _actionToPerform.DynamicInvoke();
                                     },
-                                    "An unexpected error occured during a '{0}' thread worker dynamic invocation: {1}");
+                                    "An unexpected error occured during a '{0}' thread worker dynamic invocation");
                                 // mark the time
                                 completionTicks = WorkerPool.Ticks;
                             }
@@ -233,7 +234,11 @@ namespace S3BucketSync
                             }
                         }
                         System.Diagnostics.Debug.WriteLine("Exiting '" + _id + "' worker thread: max invocation wait=" + (maxInvokeTicks * 1000.0f / WorkerPool.TicksPerSecond).ToString() + "ms");
-                    }, "Exception in '{0}' WorkerFunc: {1}");
+                    }, "Exception in '{0}' WorkerFunc");
+            }
+            catch (OutOfMemoryException e)
+            {
+                Program.RecordAsyncException(e);
             }
             finally
             {
@@ -271,7 +276,7 @@ namespace S3BucketSync
         private readonly static int PoolChunkSize = LogicalCpuCount;
         private const int RetireCheckAfterCreationMilliseconds = 5 * 60 * 1000;
         private const int RetireCheckMilliseconds = 60 * 1000;
-        private const int MaxThreadsPerLogicalCpu = 150;
+        private const int MaxThreadsPerLogicalCpu = 250;
 #endif
 
         private readonly static int MaxWorkerThreads = LogicalCpuCount * MaxThreadsPerLogicalCpu;
@@ -280,6 +285,7 @@ namespace S3BucketSync
         private string _poolName;   // constant after construction
         private Thread _poolMasterThread;
         private ThreadPriority _poolThreadPriority;
+        private int _disposing;                         // signals disposal of the pool
         private ManualResetEvent _wakePoolMasterThread; // controls the master thread waking up
         private AutoResetEvent _retireThreads;          // controls the master thread retiring threads early
 
@@ -453,11 +459,10 @@ namespace S3BucketSync
         public void Dispose()
         {
             // signal the master thread to stop
-            using (System.Threading.Interlocked.Exchange(ref _wakePoolMasterThread, null))
-            {
-                // wait for the pool master thread to recieve the message and shut down
-                _poolMasterThread.Join();
-            }
+            System.Threading.Interlocked.Exchange(ref _disposing, 1);
+            _wakePoolMasterThread.Set();
+            // wait for the pool master thread to recieve the message and shut down
+            _poolMasterThread.Join();
             // sleep up to 100ms while there are busy workers
             for (int count = 0; _busyWorkers > 0 && count < 10; ++count)
             {
@@ -473,6 +478,9 @@ namespace S3BucketSync
             {
                 _Pools.Remove(this);
             }
+            // dispose of the master thread signaller events
+            using (System.Threading.Interlocked.Exchange(ref _wakePoolMasterThread, null)) { }
+            using (System.Threading.Interlocked.Exchange(ref _retireThreads, null)) { }
 #if DEBUG
             // we're being disposed properly, so no need to call the finalizer
             GC.SuppressFinalize(this);
@@ -493,7 +501,7 @@ namespace S3BucketSync
                 // reset the event so we're ready to go again
                 wakeWorkerThreadEvent.Reset();
 
-            }, "Unexpected '{0}' Worker Thread Exception: {1}");
+            }, "Unexpected '{0}' Worker Thread Exception");
         }
 
         private void RunWithLogException(Action a, string exceptionFormatString)
@@ -502,9 +510,13 @@ namespace S3BucketSync
             {
                 a();
             }
+            catch (OutOfMemoryException e)
+            {
+                Program.RecordAsyncException(e);
+            }
             catch (Exception e)
             {
-                if (!(e is ThreadAbortException)) Program.Error(String.Format(System.Globalization.CultureInfo.InvariantCulture, exceptionFormatString, _poolName, e.ToString()));
+                if (!(e is ThreadAbortException)) Program.Error(String.Format(System.Globalization.CultureInfo.InvariantCulture, exceptionFormatString, _poolName), e.ToString());
             }
         }
 
@@ -530,12 +542,16 @@ namespace S3BucketSync
         /// </summary>
         public void RetireThreads()
         {
-            // trigger thread retirement
-            _retireThreads.Set();
-            // wake up the master thread so it does it immediately
-            _wakePoolMasterThread.Set();
-            // give up our timeslice so it can run
-            System.Threading.Thread.Sleep(0);
+            // are we not already disposing of the pool?
+            if (_disposing != 0)
+            {
+                // trigger thread retirement
+                _retireThreads.Set();
+                // wake up the master thread so it does it immediately
+                _wakePoolMasterThread.Set();
+                // give up our timeslice so it can run
+                System.Threading.Thread.Sleep(0);
+            }
         }
 
         private void PoolMaster()
@@ -551,9 +567,10 @@ namespace S3BucketSync
                         RunWithLogException(
                             () =>
                             {
+                                // get the wakt pool master signal first before we check to see if we've been disposed
                                 ManualResetEvent wakePoolMasterThread = _wakePoolMasterThread;
-                                // have we already been disposed of?
-                                if (wakePoolMasterThread == null)
+                                // are we being disposed of?
+                                if (_disposing != 0)
                                 {
                                     // exit now!
                                     stop = true;
@@ -563,6 +580,13 @@ namespace S3BucketSync
                                 if (wakePoolMasterThread.WaitOne(1000))
                                 {
                                     wakePoolMasterThread.Reset();
+                                }
+                                // are we being disposed of?
+                                if (_disposing != 0)
+                                {
+                                    // exit now!
+                                    stop = true;
+                                    return;
                                 }
                                 // do we need to add more workers?
                                 int totalWorkers = _workers;
@@ -581,7 +605,7 @@ namespace S3BucketSync
                                             // race to log a warning--did we win the race?
                                             if (System.Threading.Interlocked.CompareExchange(ref _highThreadsWarningTickCount, now, lastWarning) == lastWarning)
                                             {
-                                                Program.Log("'" + _poolName + "' Worker Pool Warning: " + (readyWorkers + busyWorkers).ToString() + " threads exceeds the limit of " + MaxWorkerThreads.ToString() + " for this computer!");
+                                                Program.LogVerbose("'" + _poolName + "' Worker Pool Warning: There are already " + (readyWorkers + busyWorkers).ToString() + " workers in this pool.  Given the number of CPUs on this computer, workers are no longer added after around " + MaxWorkerThreads.ToString() + "!");
                                             }
                                         }
                                         // now we will just carry on because we will not expand beyond the number of threads we have now
@@ -639,9 +663,9 @@ namespace S3BucketSync
                                         System.Threading.Interlocked.Exchange(ref _peakConcurrentUsageSinceLastRetirementCheck, 0);
                                     }
                                 }
-                            }, "'{0}' Pool Master Exception: {1}");
+                            }, "'{0}' Pool Master Exception");
                     }
-                }, "Critical '{0}' Pool Master Exception: {1}");
+                }, "Critical '{0}' Pool Master Exception");
         }
 
         private bool RetireOneWorker()
@@ -682,7 +706,7 @@ namespace S3BucketSync
                 // too many busy workers already?
                 if (_busyWorkers > MaxWorkerThreads)
                 {
-                    using (Program.TrackOperation("WAIT: pool overloaded: " + _poolName))
+                    using (Program.TrackOperation("WORKERPOOL: pool overloaded: ", () => _poolName.ToString()))
                     {
                         // just wait for things to change--we're overloaded and we're not going to make things better by starting up more threads!
                         System.Threading.Thread.Sleep(100);
@@ -725,7 +749,7 @@ namespace S3BucketSync
         /// <remarks>Does not throw if the specified action throws an exception.</remarks>
         public bool RunAsync(Action work, Action<Exception> exceptionCallback = null)
         {
-        Retry:
+            Retry:
             bool synchronous;
             // try to get a ready thread
             Worker worker = _readyWorkerList.Pop();
@@ -766,7 +790,7 @@ namespace S3BucketSync
                         }
                         else
                         {
-                            Program.Error("ex, Exception running '" + _poolName + "' pool async operation with no exception handler");
+                            Program.Error("Exception running '" + _poolName + "' pool async operation with no exception handler", ex.ToString());
                         }
                     }
                     finally
@@ -992,6 +1016,39 @@ namespace S3BucketSync
             }
             // we're done and we were NOT the new max
             return oldValue;
+        }
+    }
+
+    /// <summary>
+    /// A static class to manage a pool of <see cref="ManualResetEvent"/>s.
+    /// </summary>
+    public static class ManualResetEventPool
+    {
+        private static readonly ConcurrentBag<ManualResetEvent> _eventsToRecycle = new ConcurrentBag<ManualResetEvent>();
+
+        /// <summary>
+        /// Takes a <see cref="ManualResetEvent"/> from the pool.
+        /// </summary>
+        /// <param name="initialState">The desired initial state of the <see cref="ManualResetEvent"/>.</param>
+        /// <returns>A <see cref="ManualResetEvent"/> in the specified state.</returns>
+        public static ManualResetEvent Take(bool initialState)
+        {
+            ManualResetEvent ret;
+            if (_eventsToRecycle.TryTake(out ret))
+            {
+                if (initialState) ret.Set(); else ret.Reset();
+                return ret;
+            }
+            return new ManualResetEvent(initialState);
+        }
+
+        /// <summary>
+        /// Returns a <see cref="ManualResetEvent"/> to the pool.
+        /// </summary>
+        /// <param name="e">The <see cref="ManualResetEvent"/> to return to the pool.</param>
+        public static void Return(ManualResetEvent e)
+        {
+            _eventsToRecycle.Add(e);
         }
     }
 }

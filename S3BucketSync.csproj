@@ -53,6 +53,8 @@
   <ItemGroup>
     <Compile Include="BatchIdCounter.cs" />
     <Compile Include="BucketObjectsWindow.cs" />
+    <Compile Include="Child.cs" />
+    <Compile Include="ChildProcess.cs" />
     <Compile Include="State.cs" />
     <Compile Include="Program.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
