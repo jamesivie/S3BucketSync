@@ -24,6 +24,19 @@ This code may not be incorporated into any source or binary code distributed by 
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 */
+/*
+ * 
+ * Possible enhancement notes:
+ * 
+ * It appears that the current limits in copy speed are due to contention at specific points in the S3 directory.  
+ * Simultaneous copies in different ranges appear to go at the same speed, but adding more copies in the same range doesn't have much effect.
+ * This could be due to running in different processes.
+ * As a result, it would probably be best to start the program by successively dividing the UTF-8 directory space and copy files from each range simultaneously.  
+ * Most of the ranges will of course be empty because most of the UTF-8 character range is not used by most software, but the full range of characters should be able to be determined fairly quickly.
+ * This could be a recursive process.  The problem is tracking where we are in the copy and being able to resume if there is a problem.
+ * I believe this could be accomplished by giving each subprocess a separate state file and reading all the state files if we restart.
+ * 
+ * */
 namespace S3BucketSync
 {
     class Program
@@ -225,7 +238,9 @@ Logging and Saved State:
                 _StateFilePath = Path.Combine(currentDirectory, "state." + baseStateFilename + ".bin");
                 _LogFilePath = Path.Combine(currentDirectory, "log." + baseStateFilename + ".txt");
                 _ErrorFilePath = Path.Combine(currentDirectory, "error." + baseStateFilename + ".txt");
+                string grantDisplayString = "";
                 string rangeString = (startKey == null && stopKey == null) ? "" : (" with range " + ((startKey ?? "") + "-" + (stopKey ?? "")));
+                string encryptionString = string.IsNullOrEmpty(encryptionMethodString) ? "" : (" with encryption: " + encryptionMethodString);
                 // open the log file and error file
                 using (_Log = new StreamWriter(_LogFilePath, true, Encoding.UTF8))
                 using (_Error = new StreamWriter(_ErrorFilePath, true, Encoding.UTF8))
@@ -257,7 +272,7 @@ Logging and Saved State:
                     {
                         _Grant = CreateS3Grant(grantString);
                     }
-                    string grantDisplayString = (_Grant != null) ? (" with grant to " + _Grant.Grantee.EmailAddress) : ((_GrantCannedAcl != null) ? (" with canned ACL " + _GrantCannedAcl.Value) : string.Empty);
+                    grantDisplayString = (_Grant != null) ? (" with grant to " + _Grant.Grantee.EmailAddress) : ((_GrantCannedAcl != null) ? (" with canned ACL " + _GrantCannedAcl.Value) : string.Empty);
                     // target encryption?
                     _TargetEncryptionMethod = CreateTargetEncryptionMethod(_State.EncryptionMethod);
 
@@ -294,11 +309,21 @@ Logging and Saved State:
                         while (!_SourceBucketObjectsWindow.LastBatchHasBeenRead)
                         {
                             if (_AsyncException != null) throw _AsyncException;
-                            if (ExitKeyPressed()) return 2;
+                            if (ExitKeyPressed())
+                            {
+                                // log the end state
+                                Program.Log(_State.ToString());
+                                return 2;
+                            }
                             // loop until we have the desired number of batches in the window or we hit the end
                             while (_SourceBucketObjectsWindow.BatchesQueued < batchesToQueue && !_SourceBucketObjectsWindow.LastBatchHasBeenRead)
                             {
-                                if (ExitKeyPressed()) return 2;
+                                if (ExitKeyPressed())
+                                {
+                                    // log the end state
+                                    Program.Log(_State.ToString());
+                                    return 2;
+                                }
                                 // read the next batch
                                 _State.RecordQueries(true);
                                 using (TrackOperation("MAIN: Reading batch " + (_SourceBucketObjectsWindow.LastQueuedBatchId + 1).ToString()))
@@ -355,14 +380,16 @@ Logging and Saved State:
                     }
                     finally
                     {
+                        // stop the worker pool (if we exited normally, it should be idle now)
                         WorkerPool.Stop();
                     }
-                    _State.Delete(_StateFilePath);
+                    // log our results
                     Program.Log("");
-                    Program.Log("This run synchronized " + _ObjectsProcessedThisRun + "/" + _SourceObjectsReadThisRun + " objects against " + _TargetObjectsReadThisRun + " objects" + rangeString + ": ");
+                    Program.Log("This run synchronized " + _ObjectsProcessedThisRun + "/" + _SourceObjectsReadThisRun + " objects against " + _TargetObjectsReadThisRun + " objects" + grantDisplayString + rangeString + encryptionString + ": ");
                     Program.Log(_State.Report());
                     _Log.Flush();
                     _Error.Flush();
+                    _State.Delete(_StateFilePath);
                 }
                 return 0;
             }
@@ -899,7 +926,7 @@ Logging and Saved State:
             int retry;
             int completed;
             TaskStatuses(workToDo.Values.Select(w => w.Task), out waiting, out running, out retry, out completed);
-            return String.Format(System.Globalization.CultureInfo.InvariantCulture, "{0,-17}:{1:000%}/{2:000%}/{3:000%}/{4:000%}", state, waiting / total, running / total, retry / total, (completed + alreadyUpToDate) / total);
+            return String.Format(System.Globalization.CultureInfo.InvariantCulture, "{0,-17}:{1:##0%}/{2:##0%}/{3:##0%}/{4:##0%}", state, waiting / total, running / total, retry / total, (completed + alreadyUpToDate) / total);
         }
         private static void TaskStatuses(IEnumerable<Task> tasks, out int waiting, out int running, out int syncRetry, out int completed)
         {
