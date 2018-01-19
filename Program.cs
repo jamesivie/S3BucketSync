@@ -125,8 +125,9 @@ Examples:
 Interaction:
     ESC: exit (state is saved at the last fully-completed bucket, so you can restart near where you left off)
     F1: dump basic statistics
-    F2: also basic state information (what various control threads are busy doing)
-    F3: also dump all in-progress copies
+    F2: dump detailed statistics
+    F3: also basic state information (what various control threads are busy doing)
+    F4: also dump all in-progress copies
 
 Logging and Saved State:
     Errors are logged into a file named error.<region>_<bucket>_<source_prefix>.txt
@@ -1129,6 +1130,13 @@ Logging and Saved State:
             operations.AppendLine("Batches Complete: " + _TargetBucketObjectsWindow.MostRecentlyDequeuedBatchId);
             operations.AppendLine("Objects Processed: " + _ObjectsProcessedThisRun + "/" + _SourceObjectsReadThisRun);
             operations.AppendLine("Objects Compared: " + _TargetObjectsReadThisRun);
+            operations.AppendFormat("Total Cost So Far: ${0:F2}{1}" + _State.DollarCostSoFar, Environment.NewLine);
+            operations.AppendLine("Total Objects Processed: " + _State.ObjectsProcessed);
+            operations.AppendLine("Total Objects Copied: " + _State.ObjectsCopied);
+            operations.AppendLine("Total Objects Updated: " + _State.ObjectsUpdated);
+            operations.AppendLine("Total Bytes Processed: " + _State.BytesProcessed);
+            operations.AppendLine("Total Bytes Copied: " + _State.BytesCopied);
+            operations.AppendLine("Total Bytes Updated: " + _State.BytesUpdated);
             if (!string.IsNullOrEmpty(_State.LastCopyCompleted))
             {
                 operations.AppendLine("Last Object Copied: " + _State.LastCopyCompleted);
@@ -1142,6 +1150,8 @@ Logging and Saved State:
 
             if (level > 1)
             {
+                operations.AppendLine("Pending Compares: " + _PendingCompares.ToString());
+                operations.AppendLine("Copies In Progress: " + _CopiesInProgress.ToString());
                 List<OperationTracker> list = new List<OperationTracker>();
                 OperationTracker leastCopy = null;
                 OperationTracker greatestCopy = null;
